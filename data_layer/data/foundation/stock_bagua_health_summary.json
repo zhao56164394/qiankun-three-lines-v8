@@ -1,0 +1,26 @@
+{
+  "sample_count": 7332875,
+  "code_count": 3167,
+  "date_count": 2867,
+  "date_min": "2014-06-24",
+  "date_max": "2026-04-09",
+  "valid_ratio": 1.0,
+  "bagua_count": 8,
+  "gua_distribution": {
+    "000": 0.284793,
+    "001": 0.055488,
+    "010": 0.093844,
+    "011": 0.061352,
+    "100": 0.098893,
+    "101": 0.055995,
+    "110": 0.09718,
+    "111": 0.252455
+  },
+  "change_rate": 0.113304,
+  "segment_length_mean": 8.8258,
+  "segment_length_median": 6.0,
+  "short_segment_ratio_le_2": 0.236944,
+  "short_segment_ratio_le_5": 0.464416,
+  "avg_daily_code_count": 2557.6822,
+  "avg_code_change_rate": 0.114162
+}

@@ -1,0 +1,189 @@
+{
+  "baseline_config": {
+    "shared_pool_threshold": -250,
+    "cross_threshold": 60,
+    "exclude_market_guas": [
+      "100",
+      "101"
+    ],
+    "exclude_stk_guas": [
+      "101",
+      "111"
+    ],
+    "sell_method": "qian_bull"
+  },
+  "backtest_meta": {
+    "init_capital": 200000,
+    "final_capital": 1680547.3,
+    "total_return": 740.27,
+    "trade_count": 382,
+    "label": "八卦分治",
+    "win_rate": 41.88,
+    "avg_ret": 5.23,
+    "avg_hold": 25.1,
+    "max_dd": 66.34,
+    "max_dd_date": "2018-10-22"
+  },
+  "qian_signal_summary": {
+    "count": 8955,
+    "win_rate": 36.02456728084869,
+    "avg_ret": 2.251366947830176,
+    "median_ret": -7.9999999999999964,
+    "avg_hold": 60.39073143495254
+  },
+  "qian_trade_summary": {
+    "count": 56,
+    "win_rate": 33.92857142857143,
+    "avg_ret": 1.6867489613045328,
+    "median_ret": -12.806460005947068,
+    "avg_hold": 56.30357142857143,
+    "profit": -175541.97454021376
+  },
+  "qian_in_full_system_context": {
+    "trade_count": 35,
+    "win_rate": 40.0,
+    "avg_ret": 0.47113347811918466,
+    "profit": -87111.20338720316
+  },
+  "qian_signal_count_by_grade": {
+    "A": 169,
+    "A+": 413,
+    "B": 3691,
+    "B+": 600,
+    "B-": 3764,
+    "D": 318
+  },
+  "qian_signal_count_by_combo": {
+    "011": 5985,
+    "110": 607,
+    "010": 606,
+    "100": 523,
+    "???": 487,
+    "001": 482,
+    "000": 265
+  },
+  "best_5_signals": [
+    {
+      "code": "002432",
+      "signal_date": "2021-11-15",
+      "buy_date": "2021-11-16",
+      "sell_date": "2022-01-05",
+      "combo": "011",
+      "grade_actual": "B",
+      "actual_ret": 978.4461152882205,
+      "hold_days": 35,
+      "macro_gua_name": "坤",
+      "market_gua_name": "艮"
+    },
+    {
+      "code": "601000",
+      "signal_date": "2014-08-21",
+      "buy_date": "2014-08-22",
+      "sell_date": "2015-01-29",
+      "combo": "???",
+      "grade_actual": "B",
+      "actual_ret": 758.1395348837209,
+      "hold_days": 106,
+      "macro_gua_name": "",
+      "market_gua_name": "乾"
+    },
+    {
+      "code": "600734",
+      "signal_date": "2021-07-23",
+      "buy_date": "2021-07-26",
+      "sell_date": "2022-05-25",
+      "combo": "100",
+      "grade_actual": "B",
+      "actual_ret": 649.3333333333334,
+      "hold_days": 170,
+      "macro_gua_name": "兑",
+      "market_gua_name": "乾"
+    },
+    {
+      "code": "601216",
+      "signal_date": "2020-04-27",
+      "buy_date": "2020-04-28",
+      "sell_date": "2020-08-12",
+      "combo": "011",
+      "grade_actual": "B-",
+      "actual_ret": 578.6259541984733,
+      "hold_days": 71,
+      "macro_gua_name": "坤",
+      "market_gua_name": "坎"
+    },
+    {
+      "code": "601288",
+      "signal_date": "2014-09-30",
+      "buy_date": "2014-10-08",
+      "sell_date": "2015-01-08",
+      "combo": "???",
+      "grade_actual": "A+",
+      "actual_ret": 539.1304347826087,
+      "hold_days": 64,
+      "macro_gua_name": "",
+      "market_gua_name": "乾"
+    }
+  ],
+  "worst_5_signals": [
+    {
+      "code": "300044",
+      "signal_date": "2025-02-25",
+      "buy_date": "2025-02-26",
+      "sell_date": "2025-04-29",
+      "combo": "110",
+      "grade_actual": "B",
+      "actual_ret": -60.37483266398929,
+      "hold_days": 42,
+      "macro_gua_name": "兑",
+      "market_gua_name": "乾"
+    },
+    {
+      "code": "601288",
+      "signal_date": "2015-05-26",
+      "buy_date": "2015-05-27",
+      "sell_date": "2015-08-25",
+      "combo": "100",
+      "grade_actual": "A",
+      "actual_ret": -59.50920245398772,
+      "hold_days": 63,
+      "macro_gua_name": "乾",
+      "market_gua_name": "乾"
+    },
+    {
+      "code": "600329",
+      "signal_date": "2015-08-19",
+      "buy_date": "2015-08-20",
+      "sell_date": "2015-09-30",
+      "combo": "110",
+      "grade_actual": "A+",
+      "actual_ret": -54.45333333333333,
+      "hold_days": 27,
+      "macro_gua_name": "坤",
+      "market_gua_name": "巽"
+    },
+    {
+      "code": "000030",
+      "signal_date": "2015-08-14",
+      "buy_date": "2015-08-17",
+      "sell_date": "2015-09-01",
+      "combo": "110",
+      "grade_actual": "A+",
+      "actual_ret": -52.90556900726392,
+      "hold_days": 11,
+      "macro_gua_name": "坤",
+      "market_gua_name": "巽"
+    },
+    {
+      "code": "603023",
+      "signal_date": "2024-03-21",
+      "buy_date": "2024-03-22",
+      "sell_date": "2024-05-10",
+      "combo": "011",
+      "grade_actual": "B-",
+      "actual_ret": -52.23880597014925,
+      "hold_days": 29,
+      "macro_gua_name": "乾",
+      "market_gua_name": "乾"
+    }
+  ]
+}

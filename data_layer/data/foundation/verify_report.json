@@ -1,0 +1,674 @@
+{
+  "source_paths": {
+    "stock_basic": true,
+    "stock_daily_metrics_root": true,
+    "stock_moneyflow_root": true,
+    "stock_moneyflow_year_root": true,
+    "chip_root": true,
+    "limit_up_summary": true,
+    "limit_down_summary": true,
+    "limit_up_detail_root": true,
+    "limit_broken_board_summary": true,
+    "limit_ladder_root": true,
+    "index_daily_root": true,
+    "index_daily_zip": true,
+    "index_daily_zip_legacy": true,
+    "index_basic_csi": true,
+    "industry_component_root": true,
+    "concept_component_root": true,
+    "industry_component_full": true,
+    "concept_component_full": true
+  },
+  "files": {
+    "main_board_universe.csv": {
+      "path": "E:\\qb\\data_layer\\data\\foundation\\main_board_universe.csv",
+      "exists": true,
+      "rows": 11201630,
+      "columns": [
+        "date",
+        "code",
+        "name",
+        "exchange",
+        "board",
+        "is_st",
+        "list_date",
+        "industry_name",
+        "in_universe"
+      ],
+      "min_date": "2014-01-02",
+      "max_date": "2026-04-09",
+      "duplicate_date_code": 0
+    },
+    "daily_cross_section.csv": {
+      "path": "E:\\qb\\data_layer\\data\\foundation\\daily_cross_section.csv",
+      "exists": true,
+      "rows": 7694708,
+      "columns": [
+        "date",
+        "code",
+        "name",
+        "exchange",
+        "board",
+        "industry_name",
+        "open",
+        "high",
+        "low",
+        "close",
+        "amount",
+        "turnover_rate",
+        "total_mv",
+        "circ_mv",
+        "pe",
+        "pb",
+        "small_net",
+        "large_net",
+        "super_large_net",
+        "cost_50",
+        "cost_85",
+        "avg_cost",
+        "winner_ratio",
+        "is_zt",
+        "is_dt",
+        "is_zb",
+        "lb_count",
+        "zt_count",
+        "dt_count",
+        "zb_count",
+        "concept_count",
+        "above_ma5_ratio",
+        "above_ma10_ratio",
+        "above_ma20_ratio",
+        "above_ma60_ratio",
+        "new_high_20_ratio",
+        "new_low_20_ratio",
+        "allA_close",
+        "hs300_close",
+        "csi500_close",
+        "csi1000_close",
+        "sh_close",
+        "sz_close"
+      ],
+      "min_date": "2014-01-02",
+      "max_date": "2026-04-09",
+      "duplicate_date_code": 0
+    },
+    "daily_5d_scores.csv": {
+      "path": "E:\\qb\\data_layer\\data\\foundation\\daily_5d_scores.csv",
+      "exists": true,
+      "rows": 7694708,
+      "columns": [
+        "date",
+        "code",
+        "score_wei",
+        "score_shi",
+        "score_bian",
+        "score_zhong",
+        "score_qi",
+        "wei_cost_score",
+        "wei_winner_score",
+        "wei_pb_score",
+        "shi_index_score",
+        "shi_turnover_score",
+        "bian_flow_score",
+        "bian_chip_score",
+        "zhong_amount_score",
+        "zhong_concept_score",
+        "zhong_event_score",
+        "qi_flow_score",
+        "qi_turnover_score",
+        "qi_crowding_score"
+      ],
+      "min_date": "2014-01-02",
+      "max_date": "2026-04-09",
+      "duplicate_date_code": 0
+    },
+    "daily_3yao.csv": {
+      "path": "E:\\qb\\data_layer\\data\\foundation\\daily_3yao.csv",
+      "exists": true,
+      "rows": 7694708,
+      "columns": [
+        "date",
+        "code",
+        "yao_1",
+        "yao_2",
+        "yao_3"
+      ],
+      "min_date": "2014-01-02",
+      "max_date": "2026-04-09",
+      "duplicate_date_code": 0
+    },
+    "daily_bagua_sequence.csv": {
+      "path": "E:\\qb\\data_layer\\data\\foundation\\daily_bagua_sequence.csv",
+      "exists": true,
+      "rows": 7694708,
+      "columns": [
+        "date",
+        "code",
+        "gua_code",
+        "gua_name",
+        "prev_gua",
+        "changed",
+        "seg_id",
+        "seg_day"
+      ],
+      "min_date": "2014-01-02",
+      "max_date": "2026-04-09",
+      "duplicate_date_code": 0
+    },
+    "market_bagua_daily.csv": {
+      "path": "E:\\qb\\data_layer\\data\\foundation\\market_bagua_daily.csv",
+      "exists": true,
+      "rows": 2867,
+      "columns": [
+        "date",
+        "stock_count",
+        "market_open_proxy",
+        "market_high_proxy",
+        "market_low_proxy",
+        "market_close_proxy",
+        "score_wei",
+        "score_shi",
+        "score_bian",
+        "score_zhong",
+        "score_qi",
+        "up_ratio",
+        "zt_ratio",
+        "dt_ratio",
+        "turnover_median",
+        "zt_count",
+        "dt_count",
+        "zb_count",
+        "limit_heat",
+        "limit_quality",
+        "ladder_heat",
+        "above_ma5_ratio",
+        "above_ma10_ratio",
+        "above_ma20_ratio",
+        "above_ma60_ratio",
+        "new_high_20_ratio",
+        "new_low_20_ratio",
+        "ma_breadth_score",
+        "breakout_score",
+        "enhanced_breadth_momo",
+        "market_trend_55",
+        "market_trend_anchor_120",
+        "market_speed_10",
+        "market_speed_20",
+        "market_speed_30",
+        "market_speed_combo",
+        "up_ratio_ma5",
+        "up_ratio_ma20",
+        "zt_ratio_ma5",
+        "zt_ratio_ma20",
+        "turnover_median_ma5",
+        "turnover_median_ma20",
+        "breadth_momo",
+        "yao_1",
+        "yao_2",
+        "yao_3",
+        "gua_code",
+        "gua_name",
+        "prev_gua",
+        "changed",
+        "seg_id",
+        "seg_day"
+      ],
+      "min_date": "2014-06-24",
+      "max_date": "2026-04-09"
+    },
+    "macro_bagua_daily.csv": {
+      "path": "E:\\qb\\data_layer\\data\\foundation\\macro_bagua_daily.csv",
+      "exists": true,
+      "rows": 2678,
+      "columns": [
+        "date",
+        "stock_count",
+        "market_open_proxy",
+        "market_high_proxy",
+        "market_low_proxy",
+        "market_close_proxy",
+        "up_ratio",
+        "zt_ratio",
+        "dt_ratio",
+        "turnover_median",
+        "zt_count",
+        "dt_count",
+        "zb_count",
+        "limit_heat",
+        "limit_quality",
+        "ladder_heat",
+        "above_ma20_ratio",
+        "above_ma60_ratio",
+        "new_high_20_ratio",
+        "new_low_20_ratio",
+        "market_trend_slow",
+        "market_trend_anchor_slow",
+        "market_speed_slow",
+        "macro_breadth_slow",
+        "yao_1",
+        "yao_2",
+        "yao_3",
+        "gua_code",
+        "gua_name",
+        "prev_gua",
+        "changed",
+        "seg_id",
+        "seg_day"
+      ],
+      "min_date": "2015-04-02",
+      "max_date": "2026-04-09"
+    },
+    "daily_forward_returns.csv": {
+      "path": "E:\\qb\\data_layer\\data\\foundation\\daily_forward_returns.csv",
+      "exists": true,
+      "rows": 7694708,
+      "columns": [
+        "date",
+        "code",
+        "ret_fwd_1d",
+        "avail_date_1d",
+        "ret_fwd_3d",
+        "avail_date_3d",
+        "ret_fwd_5d",
+        "avail_date_5d",
+        "ret_fwd_10d",
+        "avail_date_10d",
+        "ret_fwd_20d",
+        "avail_date_20d",
+        "ret_fwd_60d",
+        "avail_date_60d"
+      ],
+      "min_date": "2014-01-02",
+      "max_date": "2026-04-09",
+      "duplicate_date_code": 0
+    }
+  },
+  "checks": {
+    "universe_count": 7694708,
+    "st_in_universe": 341039,
+    "universe_daily_count": {
+      "min": 1031,
+      "max": 3178,
+      "mean": 2581.25
+    },
+    "cross_section_missing_rate": {
+      "close": 0.0,
+      "turnover_rate": 0.0,
+      "cost_50": 0.246015,
+      "winner_ratio": 0.246015,
+      "small_net": 0.000387,
+      "allA_close": 0.0
+    },
+    "market_structure_feature_checks": {
+      "missing_rate": {
+        "above_ma5_ratio": 0.0,
+        "above_ma10_ratio": 0.0,
+        "above_ma20_ratio": 0.0,
+        "above_ma60_ratio": 0.0,
+        "new_high_20_ratio": 0.0,
+        "new_low_20_ratio": 0.0
+      },
+      "distribution": {
+        "above_ma5_ratio": {
+          "min": 0.005208,
+          "p25": 0.284214,
+          "median": 0.475583,
+          "p75": 0.688301,
+          "max": 0.995849,
+          "mean": 0.489225,
+          "out_of_range_ratio": 0.0
+        },
+        "above_ma10_ratio": {
+          "min": 0.005787,
+          "p25": 0.297879,
+          "median": 0.480405,
+          "p75": 0.681737,
+          "max": 0.996488,
+          "mean": 0.489845,
+          "out_of_range_ratio": 0.0
+        },
+        "above_ma20_ratio": {
+          "min": 0.006437,
+          "p25": 0.291057,
+          "median": 0.469914,
+          "p75": 0.673077,
+          "max": 0.99553,
+          "mean": 0.487005,
+          "out_of_range_ratio": 0.0
+        },
+        "above_ma60_ratio": {
+          "min": 0.012238,
+          "p25": 0.274536,
+          "median": 0.43676,
+          "p75": 0.629641,
+          "max": 0.995439,
+          "mean": 0.462823,
+          "out_of_range_ratio": 0.0
+        },
+        "new_high_20_ratio": {
+          "min": 0.00057,
+          "p25": 0.049537,
+          "median": 0.087487,
+          "p75": 0.137799,
+          "max": 0.984345,
+          "mean": 0.108976,
+          "out_of_range_ratio": 0.0
+        },
+        "new_low_20_ratio": {
+          "min": 0.0,
+          "p25": 0.015253,
+          "median": 0.049192,
+          "p75": 0.1532,
+          "max": 0.923283,
+          "mean": 0.117938,
+          "out_of_range_ratio": 0.0
+        }
+      },
+      "yearly_mean": {
+        "2014": {
+          "above_ma5_ratio": 0.541269,
+          "above_ma10_ratio": 0.558096,
+          "above_ma20_ratio": 0.579843,
+          "above_ma60_ratio": 0.618349,
+          "new_high_20_ratio": 0.138144,
+          "new_low_20_ratio": 0.076185
+        },
+        "2015": {
+          "above_ma5_ratio": 0.572185,
+          "above_ma10_ratio": 0.599529,
+          "above_ma20_ratio": 0.624605,
+          "above_ma60_ratio": 0.611972,
+          "new_high_20_ratio": 0.17153,
+          "new_low_20_ratio": 0.06623
+        },
+        "2016": {
+          "above_ma5_ratio": 0.500336,
+          "above_ma10_ratio": 0.490915,
+          "above_ma20_ratio": 0.486434,
+          "above_ma60_ratio": 0.465822,
+          "new_high_20_ratio": 0.094325,
+          "new_low_20_ratio": 0.105791
+        },
+        "2017": {
+          "above_ma5_ratio": 0.46598,
+          "above_ma10_ratio": 0.451984,
+          "above_ma20_ratio": 0.431828,
+          "above_ma60_ratio": 0.373787,
+          "new_high_20_ratio": 0.084564,
+          "new_low_20_ratio": 0.121516
+        },
+        "2018": {
+          "above_ma5_ratio": 0.452105,
+          "above_ma10_ratio": 0.4349,
+          "above_ma20_ratio": 0.385682,
+          "above_ma60_ratio": 0.263649,
+          "new_high_20_ratio": 0.073898,
+          "new_low_20_ratio": 0.141265
+        },
+        "2019": {
+          "above_ma5_ratio": 0.507479,
+          "above_ma10_ratio": 0.508637,
+          "above_ma20_ratio": 0.509975,
+          "above_ma60_ratio": 0.462092,
+          "new_high_20_ratio": 0.119176,
+          "new_low_20_ratio": 0.103167
+        },
+        "2020": {
+          "above_ma5_ratio": 0.48191,
+          "above_ma10_ratio": 0.478461,
+          "above_ma20_ratio": 0.479156,
+          "above_ma60_ratio": 0.48341,
+          "new_high_20_ratio": 0.111699,
+          "new_low_20_ratio": 0.110151
+        },
+        "2021": {
+          "above_ma5_ratio": 0.486687,
+          "above_ma10_ratio": 0.492736,
+          "above_ma20_ratio": 0.49543,
+          "above_ma60_ratio": 0.470912,
+          "new_high_20_ratio": 0.115254,
+          "new_low_20_ratio": 0.11439
+        },
+        "2022": {
+          "above_ma5_ratio": 0.468733,
+          "above_ma10_ratio": 0.468752,
+          "above_ma20_ratio": 0.45851,
+          "above_ma60_ratio": 0.422814,
+          "new_high_20_ratio": 0.097461,
+          "new_low_20_ratio": 0.138354
+        },
+        "2023": {
+          "above_ma5_ratio": 0.46231,
+          "above_ma10_ratio": 0.464962,
+          "above_ma20_ratio": 0.458852,
+          "above_ma60_ratio": 0.445907,
+          "new_high_20_ratio": 0.100816,
+          "new_low_20_ratio": 0.154757
+        },
+        "2024": {
+          "above_ma5_ratio": 0.470192,
+          "above_ma10_ratio": 0.467755,
+          "above_ma20_ratio": 0.48241,
+          "above_ma60_ratio": 0.456366,
+          "new_high_20_ratio": 0.100254,
+          "new_low_20_ratio": 0.144615
+        },
+        "2025": {
+          "above_ma5_ratio": 0.506133,
+          "above_ma10_ratio": 0.518211,
+          "above_ma20_ratio": 0.516374,
+          "above_ma60_ratio": 0.527631,
+          "new_high_20_ratio": 0.118533,
+          "new_low_20_ratio": 0.099874
+        },
+        "2026": {
+          "above_ma5_ratio": 0.498324,
+          "above_ma10_ratio": 0.476957,
+          "above_ma20_ratio": 0.473452,
+          "above_ma60_ratio": 0.517533,
+          "new_high_20_ratio": 0.120192,
+          "new_low_20_ratio": 0.114565
+        }
+      },
+      "ma_monotonicity_violation_ratio": 0.873399,
+      "breakout_extremes": {
+        "both_near_zero_ratio": 0.002159,
+        "both_high_ratio": 0.291926
+      }
+    },
+    "score_distribution": {
+      "score_wei": {
+        "min": 0.0105,
+        "max": 100.0,
+        "mean": 49.983
+      },
+      "score_shi": {
+        "min": 25.0236,
+        "max": 75.0242,
+        "mean": 50.0194
+      },
+      "score_bian": {
+        "min": 0.0609,
+        "max": 99.8805,
+        "mean": 50.0162
+      },
+      "score_zhong": {
+        "min": 16.8556,
+        "max": 99.6798,
+        "mean": 50.0358
+      },
+      "score_qi": {
+        "min": 0.3599,
+        "max": 99.947,
+        "mean": 50.0194
+      }
+    },
+    "bagua_distribution": {
+      "000": 1726140,
+      "111": 1610260,
+      "100": 1391091,
+      "011": 1240376,
+      "010": 508909,
+      "101": 478868,
+      "110": 372708,
+      "001": 366356
+    },
+    "bagua_classes": [
+      "000",
+      "001",
+      "010",
+      "011",
+      "100",
+      "101",
+      "110",
+      "111"
+    ],
+    "segment_length": {
+      "min": 1,
+      "max": 578,
+      "mean": 2.8259,
+      "median": 1.0
+    },
+    "bagua_change_rate": 0.353866,
+    "market_bagua_distribution": {
+      "111": 601,
+      "000": 556,
+      "110": 419,
+      "001": 390,
+      "100": 247,
+      "011": 243,
+      "101": 207,
+      "010": 204
+    },
+    "market_gua_classes": [
+      "000",
+      "001",
+      "010",
+      "011",
+      "100",
+      "101",
+      "110",
+      "111"
+    ],
+    "market_gua_class_count": 8,
+    "market_top1_ratio": 0.209627,
+    "market_top2_ratio": 0.403558,
+    "yao_1_ratio": 0.514126,
+    "yao_2_ratio": 0.511685,
+    "yao_3_ratio": 0.502616,
+    "market_segment_length": {
+      "min": 1,
+      "max": 23,
+      "mean": 3.5838,
+      "median": 3.0
+    },
+    "market_bagua_change_rate": 0.279037,
+    "market_period_structure": {
+      "2014_2017": {
+        "market_gua_classes": [
+          "000",
+          "001",
+          "010",
+          "011",
+          "100",
+          "101",
+          "110",
+          "111"
+        ],
+        "market_gua_class_count": 8,
+        "market_top1_ratio": 0.271147,
+        "market_top2_ratio": 0.453071,
+        "yao_1_ratio": 0.597914,
+        "yao_2_ratio": 0.565469,
+        "yao_3_ratio": 0.520278,
+        "market_segment_length": {
+          "min": 1,
+          "max": 17,
+          "mean": 3.4382,
+          "median": 2.0
+        },
+        "market_bagua_change_rate": 0.290846
+      },
+      "2018_2022": {
+        "market_gua_classes": [
+          "000",
+          "001",
+          "010",
+          "011",
+          "100",
+          "101",
+          "110",
+          "111"
+        ],
+        "market_gua_class_count": 8,
+        "market_top1_ratio": 0.182716,
+        "market_top2_ratio": 0.357202,
+        "yao_1_ratio": 0.45679,
+        "yao_2_ratio": 0.509465,
+        "yao_3_ratio": 0.506996,
+        "market_segment_length": {
+          "min": 1,
+          "max": 23,
+          "mean": 3.6299,
+          "median": 3.0
+        },
+        "market_bagua_change_rate": 0.274897
+      },
+      "2023_2025": {
+        "market_gua_classes": [
+          "000",
+          "001",
+          "010",
+          "011",
+          "100",
+          "101",
+          "110",
+          "111"
+        ],
+        "market_gua_class_count": 8,
+        "market_top1_ratio": 0.211829,
+        "market_top2_ratio": 0.403026,
+        "yao_1_ratio": 0.522696,
+        "yao_2_ratio": 0.460798,
+        "yao_3_ratio": 0.477304,
+        "market_segment_length": {
+          "min": 1,
+          "max": 14,
+          "mean": 3.6768,
+          "median": 3.0
+        },
+        "market_bagua_change_rate": 0.270977
+      },
+      "2026": {
+        "market_gua_classes": [
+          "000",
+          "001",
+          "010",
+          "100",
+          "110",
+          "111"
+        ],
+        "market_gua_class_count": 6,
+        "market_top1_ratio": 0.370968,
+        "market_top2_ratio": 0.629032,
+        "yao_1_ratio": 0.370968,
+        "yao_2_ratio": 0.403226,
+        "yao_3_ratio": 0.467742,
+        "market_segment_length": {
+          "min": 1,
+          "max": 9,
+          "mean": 3.3158,
+          "median": 2.0
+        },
+        "market_bagua_change_rate": 0.290323
+      }
+    },
+    "forward_returns_missing_rate": {
+      "ret_fwd_1d": 0.000414,
+      "ret_fwd_3d": 0.001241,
+      "ret_fwd_5d": 0.002068,
+      "ret_fwd_10d": 0.004136,
+      "ret_fwd_20d": 0.00827
+    }
+  }
+}

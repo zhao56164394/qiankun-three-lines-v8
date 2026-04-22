@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+.venv*/
+venv*/
+
+# 数据文件（太大，不入库）
+*.csv
+*.pkl
+data_layer/data/stocks/
+data_layer/data/_cache_*.pkl
+data_layer/data/*.csv
+data_layer/data/*.json
+
+# 日志
+logs/
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# 实盘运行时状态
+live/runtime/
+live/snapshots/
+live/logs/
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Claude
+.claude/

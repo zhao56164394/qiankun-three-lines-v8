@@ -1,0 +1,197 @@
+{
+  "scan_grid": {
+    "trend_period": [
+      120,
+      144,
+      180
+    ],
+    "speed_lookback": [
+      40,
+      60,
+      80
+    ],
+    "breadth_fast_window": [
+      15,
+      20,
+      30
+    ],
+    "breadth_slow_window": [
+      40,
+      60,
+      90
+    ],
+    "breadth_weight_ma60": [
+      0.55,
+      0.65,
+      0.75
+    ],
+    "breakout_weight": [
+      0.3,
+      0.6,
+      0.9
+    ]
+  },
+  "default_macro_params": {
+    "trend_period": 144,
+    "yao1_window": 250,
+    "yao1_min_periods": 160,
+    "yao1_q_low": 0.4,
+    "yao1_q_high": 0.6,
+    "speed_lookback": 60,
+    "breadth_fast_window": 20,
+    "breadth_slow_window": 60,
+    "breadth_weight_ma60": 0.65,
+    "breadth_weight_ma20": 0.35,
+    "breakout_weight": 0.6,
+    "heat_weight": 0.25
+  },
+  "market_baseline": {
+    "bagua_count": 8,
+    "top1_ratio": 0.209627,
+    "top2_ratio": 0.403558,
+    "sample_count": 2867,
+    "yao_1_ratio": 0.514126,
+    "yao_2_ratio": 0.511685,
+    "yao_3_ratio": 0.502616,
+    "segment_length_mean": 3.5838,
+    "segment_length_median": 3.0,
+    "segment_length_p75": 5.0,
+    "short_segment_ratio_le_2": 0.475,
+    "short_segment_ratio_le_5": 0.79875,
+    "change_rate": 0.279037
+  },
+  "default_macro_baseline": {
+    "bagua_count": 8,
+    "top1_ratio": 0.249066,
+    "top2_ratio": 0.490291,
+    "sample_count": 2678,
+    "yao_1_ratio": 0.505228,
+    "yao_2_ratio": 0.477595,
+    "yao_3_ratio": 0.48469,
+    "segment_length_mean": 12.1727,
+    "segment_length_median": 8.0,
+    "segment_length_p75": 16.0,
+    "short_segment_ratio_le_2": 0.195455,
+    "short_segment_ratio_le_5": 0.404545,
+    "change_rate": 0.082151
+  },
+  "selection_logic": {
+    "hard_filters": [
+      "bagua_count >= 6",
+      "change_rate < current_market_change_rate",
+      "segment_length_median > current_market_segment_median",
+      "short_segment_ratio_le_2 <= default_macro_short2 * 1.15 且不高于 0.35",
+      "top1_ratio / top2_ratio 不明显塌缩"
+    ],
+    "rank_metrics": [
+      "60d spread_best_worst 更高",
+      "20d spread_best_worst 更高",
+      "年度最差 spread 更高",
+      "segment_length_median 更高",
+      "change_rate 更低",
+      "short_segment_ratio_le_2 更低",
+      "rolling_top1_ratio_max 更低"
+    ]
+  },
+  "evaluated_config_count": 729,
+  "candidate_count": 644,
+  "status": "completed",
+  "progress": {
+    "completed": 729,
+    "total": 729,
+    "ratio": 1.0
+  },
+  "best_config": {
+    "config_label": "tp120_sp60_bf20_bs60_ma6075_bo30",
+    "trend_period": 120,
+    "yao1_window": 250,
+    "yao1_min_periods": 160,
+    "yao1_q_low": 0.4,
+    "yao1_q_high": 0.6,
+    "speed_lookback": 60,
+    "breadth_fast_window": 20,
+    "breadth_slow_window": 60,
+    "breadth_weight_ma60": 0.75,
+    "breadth_weight_ma20": 0.25,
+    "breakout_weight": 0.3,
+    "heat_weight": 0.25,
+    "sample_count": 2702,
+    "bagua_count": 8,
+    "top1_ratio": 0.247224,
+    "top2_ratio": 0.485936,
+    "yao_1_ratio": 0.491118,
+    "yao_2_ratio": 0.472613,
+    "yao_3_ratio": 0.494449,
+    "segment_length_mean": 13.3103,
+    "segment_length_median": 8.0,
+    "segment_length_p75": 19.5,
+    "short_segment_ratio_le_2": 0.182266,
+    "short_segment_ratio_le_5": 0.374384,
+    "change_rate": 0.07513,
+    "spread_20d_all": 5.0209,
+    "best_mean_ret_20d_all": 1.9145,
+    "worst_mean_ret_20d_all": -3.1064,
+    "spread_60d_all": 9.8291,
+    "best_mean_ret_60d_all": 3.4706,
+    "worst_mean_ret_60d_all": -6.3585,
+    "yearly_spread_20d_min": 5.4521,
+    "yearly_spread_20d_median": 9.2044,
+    "yearly_spread_20d_max": 28.6341,
+    "yearly_spread_60d_min": 2.188,
+    "yearly_spread_60d_median": 16.3276,
+    "yearly_spread_60d_max": 42.5243,
+    "rolling_top1_ratio_max": 0.508,
+    "rolling_top2_ratio_max": 0.772,
+    "rolling_bagua_count_min": 6,
+    "rolling_change_rate_max": 0.12,
+    "rolling500_top1_ratio_max": 0.412,
+    "rolling500_top2_ratio_max": 0.606,
+    "vs_market_change_rate_delta": -0.203907,
+    "vs_market_segment_median_delta": 5.0,
+    "vs_market_short2_delta": -0.292734,
+    "vs_default_macro_change_rate_delta": -0.007021,
+    "vs_default_macro_segment_median_delta": 0.0,
+    "vs_default_macro_short2_delta": -0.013189,
+    "is_candidate": 1,
+    "filter_reason": "",
+    "rank_score": 80.5093,
+    "candidate_rank": 1,
+    "overall_rank": 1
+  },
+  "top_config_labels": [
+    "tp120_sp60_bf20_bs60_ma6075_bo30",
+    "tp120_sp60_bf30_bs60_ma6065_bo90",
+    "tp180_sp80_bf30_bs60_ma6075_bo90",
+    "tp180_sp80_bf30_bs60_ma6065_bo90",
+    "tp180_sp40_bf30_bs90_ma6065_bo60",
+    "tp180_sp80_bf30_bs90_ma6055_bo90",
+    "tp180_sp80_bf30_bs90_ma6065_bo60",
+    "tp120_sp60_bf20_bs90_ma6065_bo30",
+    "tp180_sp80_bf30_bs90_ma6065_bo90",
+    "tp180_sp80_bf30_bs90_ma6055_bo60",
+    "tp180_sp40_bf30_bs90_ma6075_bo90",
+    "tp120_sp60_bf20_bs90_ma6055_bo60",
+    "tp120_sp60_bf20_bs90_ma6065_bo90",
+    "tp180_sp80_bf30_bs40_ma6075_bo90",
+    "tp180_sp80_bf20_bs90_ma6055_bo60",
+    "tp180_sp80_bf30_bs90_ma6075_bo90",
+    "tp180_sp40_bf30_bs90_ma6065_bo90",
+    "tp120_sp60_bf20_bs90_ma6075_bo30",
+    "tp144_sp80_bf20_bs90_ma6065_bo30",
+    "tp120_sp60_bf20_bs90_ma6075_bo60"
+  ],
+  "detail_config_labels": [
+    "tp180_sp80_bf30_bs60_ma6065_bo90",
+    "tp120_sp60_bf20_bs60_ma6075_bo30",
+    "tp180_sp40_bf30_bs90_ma6065_bo60",
+    "tp180_sp80_bf30_bs60_ma6075_bo90",
+    "tp120_sp60_bf30_bs60_ma6065_bo90"
+  ],
+  "files": {
+    "macro_bagua_param_scan_summary.csv": true,
+    "macro_bagua_param_scan_top.csv": true,
+    "macro_bagua_param_scan_yearly.csv": true,
+    "macro_bagua_param_scan_rolling.csv": true,
+    "macro_bagua_param_scan_compare.csv": true
+  }
+}
