@@ -3,9 +3,12 @@
 import argparse
 import contextlib
 import copy
+import glob
+import hashlib
 import io
 import json
 import os
+import pickle
 import sys
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -17,50 +20,122 @@ sys.stdout = io.TextIOWrapper(
 import backtest_8gua as b8
 import backtest_baseline as bb
 import pandas as pd
-
-
-GUA_LABELS = {
-    '000': '坤', '001': '艮', '010': '坎', '011': '巽',
-    '100': '震', '101': '离', '110': '兑', '111': '乾',
-}
+from data_layer.gua_data import GUA_NAMES as GUA_LABELS, compat_rename_columns
 
 RUNTIME_CACHE: Optional[Dict[str, Any]] = None
 PAYLOAD_CACHE: Dict[Tuple[str, Tuple[Tuple[str, Any], ...]], Dict[str, Any]] = {}
 BASELINE_SNAPSHOT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_layer', 'data', 'bagua_debug_baseline_snapshot.json')
 
+# ============================================================
+# 磁盘缓存: build_payload_for_cfg 结果跨进程/跨会话共享
+# key = (gua, cfg_hash, data_version)
+# data_version 随关键数据文件 mtime 变化而失效
+# ============================================================
+PAYLOAD_DISK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       'data_layer', 'data', 'payload_cache')
+_DATA_VERSION_PATHS = [
+    # 只放"原始数据源"；snapshot / payload pkl 都是派生产物，mtime 变化只表示重新生成
+    # 但内容不变 → 不应该让下游缓存失效
+    ('data_layer', 'data', 'zz1000_daily.csv'),
+    ('data_layer', 'data', 'foundation', 'market_bagua_daily.csv'),
+    ('data_layer', 'data', 'foundation', 'stock_bagua_daily.csv'),
+    ('data_layer', 'data', 'foundation', 'daily_bagua_sequence.csv'),
+    ('data_layer', 'data', 'foundation', 'daily_5d_scores.csv'),
+]
 
+
+_cached_data_version = None
+
+def _data_version_stamp() -> str:
+    """关键数据文件 mtime 的 max，作为数据版本戳。数据一变 → 所有旧缓存不命中。"""
+    global _cached_data_version
+    if _cached_data_version is not None:
+        return _cached_data_version
+    root = os.path.dirname(os.path.abspath(__file__))
+    mtimes = []
+    for parts in _DATA_VERSION_PATHS:
+        full = os.path.join(root, *parts)
+        if os.path.exists(full):
+            mtimes.append(int(os.path.getmtime(full)))
+    _cached_data_version = str(max(mtimes)) if mtimes else '0'
+    return _cached_data_version
+
+
+def data_version_stamp() -> str:
+    return _data_version_stamp()
+
+
+def _canonical_cfg_repr(cfg: Dict[str, Any]) -> str:
+    def _norm(v):
+        if isinstance(v, set):
+            return ['__set__'] + sorted(v)
+        if isinstance(v, dict):
+            return {k: _norm(vv) for k, vv in sorted(v.items())}
+        if isinstance(v, (list, tuple)):
+            return [_norm(x) for x in v]
+        return v
+    return json.dumps(_norm(cfg), sort_keys=True, default=str)
+
+
+def _cfg_hash(cfg: Dict[str, Any]) -> str:
+    return hashlib.md5(_canonical_cfg_repr(cfg).encode('utf-8')).hexdigest()[:12]
+
+
+def _disk_cache_path(gua: str, cfg: Dict[str, Any], data_version: Optional[str] = None) -> str:
+    if data_version is None:
+        data_version = _data_version_stamp()
+    fname = f'{gua}_{_cfg_hash(cfg)}_{data_version}.pkl'
+    return os.path.join(PAYLOAD_DISK_CACHE_DIR, fname)
+
+
+def _load_disk_cache(gua: str, cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    path = _disk_cache_path(gua, cfg)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    except Exception:
+        return None
+
+
+def _save_disk_cache(gua: str, cfg: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    os.makedirs(PAYLOAD_DISK_CACHE_DIR, exist_ok=True)
+    ch = _cfg_hash(cfg)
+    # 先清理同 (gua, cfg_hash) 的旧 data_version 文件
+    for stale in glob.glob(os.path.join(PAYLOAD_DISK_CACHE_DIR, f'{gua}_{ch}_*.pkl')):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
+    path = _disk_cache_path(gua, cfg)
+    try:
+        with open(path, 'wb') as f:
+            pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception:
+        pass
+
+
+def clear_payload_disk_cache() -> int:
+    """清空全部磁盘缓存，返回删除文件数。"""
+    if not os.path.exists(PAYLOAD_DISK_CACHE_DIR):
+        return 0
+    n = 0
+    for p in glob.glob(os.path.join(PAYLOAD_DISK_CACHE_DIR, '*.pkl')):
+        try:
+            os.remove(p); n += 1
+        except OSError:
+            pass
+    return n
+
+
+# ============================================================
+# 八卦实验配置: 只保留"动作映射" (fields / stock_mode / *_cases)
+# 具体参数值 (naked_cfg) 全部从 b8.GUA_STRATEGY 派生，实现 Single Source of Truth
+# ============================================================
 GUA_EXPERIMENT_SPECS: Dict[str, Dict[str, Any]] = {
     '110': {
         'name': '兑',
-        'base_cfg': {
-            'dui_buy': True,
-            'dui_buy_mode': 'double_rise',
-            'dui_cross_threshold': 20,
-            'dui_allow_di_gua': None,
-            'dui_exclude_ren_gua': set(),
-            'dui_market_stock_whitelist': {
-                '000': {'000', '001', '010'},
-                '001': {'000', '010'},
-                '010': set(),
-                '011': {'010', '011'},
-                '100': set(),
-                '101': set(),
-                '110': {'110'},
-                '111': set(),
-            },
-            'pool_threshold': -250,
-            'sell': 'dui_bear',
-        },
-        'naked_cfg': {
-            'dui_buy': True,
-            'dui_buy_mode': 'double_rise',
-            'dui_cross_threshold': 20,
-            'dui_allow_di_gua': None,
-            'dui_exclude_ren_gua': set(),
-            'dui_market_stock_whitelist': None,
-            'pool_threshold': -250,
-            'sell': 'dui_bear',
-        },
         'fields': {
             'market': 'dui_market_stock_whitelist',
             'stock': 'dui_allow_di_gua',
@@ -80,24 +155,6 @@ GUA_EXPERIMENT_SPECS: Dict[str, Dict[str, Any]] = {
     },
     '001': {
         'name': '艮',
-        'base_cfg': {
-            'gen_buy': True,
-            'gen_exclude_ren_gua': {'001'},
-            'gen_allow_di_gua': {'000', '010'},
-            'pool_threshold': -250,
-            'gen_buy_mode': 'double_rise',
-            'gen_cross_threshold': 20,
-            'sell': 'bear',
-        },
-        'naked_cfg': {
-            'gen_buy': True,
-            'gen_exclude_ren_gua': set(),
-            'gen_allow_di_gua': None,
-            'pool_threshold': -250,
-            'gen_buy_mode': 'double_rise',
-            'gen_cross_threshold': 20,
-            'sell': 'bear',
-        },
         'fields': {
             'market': 'gen_exclude_ren_gua',
             'stock': 'gen_allow_di_gua',
@@ -117,22 +174,6 @@ GUA_EXPERIMENT_SPECS: Dict[str, Dict[str, Any]] = {
     },
     '000': {
         'name': '坤',
-        'base_cfg': {
-            'kun_buy': True,
-            'kun_exclude_ren_gua': set(),
-            'kun_allow_di_gua': None,
-            'pool_threshold': -250,
-            'kun_buy_mode': 'double_rise',
-            'sell': 'bear',
-        },
-        'naked_cfg': {
-            'kun_buy': True,
-            'kun_exclude_ren_gua': set(),
-            'kun_allow_di_gua': None,
-            'pool_threshold': -250,
-            'kun_buy_mode': 'double_rise',
-            'sell': 'bear',
-        },
         'fields': {
             'market': 'kun_exclude_ren_gua',
             'stock': 'kun_allow_di_gua',
@@ -147,26 +188,6 @@ GUA_EXPERIMENT_SPECS: Dict[str, Dict[str, Any]] = {
     },
     '100': {
         'name': '震',
-        'base_cfg': {
-            'zhen_buy': True,
-            'zhen_buy_mode': 'double_rise',
-            'zhen_cross_threshold': 20,
-            'zhen_exclude_ren_gua': {'001', '011'},
-            'zhen_allow_di_gua': None,
-            'pool_threshold': -250,
-            'sell': 'bull',
-        },
-        'naked_cfg': {
-            'zhen_buy': True,
-            'zhen_buy_mode': 'double_rise',
-            'zhen_cross_threshold': 20,
-            'zhen_exclude_ren_gua': set(),
-            'zhen_allow_di_gua': None,
-            'pool_threshold': -250,
-            'pool_days_min': 1,
-            'pool_days_max': 7,
-            'sell': 'bear',
-        },
         'fields': {
             'market': 'zhen_exclude_ren_gua',
             'stock': 'zhen_allow_di_gua',
@@ -185,24 +206,6 @@ GUA_EXPERIMENT_SPECS: Dict[str, Dict[str, Any]] = {
     },
     '101': {
         'name': '离',
-        'base_cfg': {
-            'li_buy': True,
-            'li_buy_mode': 'double_rise',
-            'li_cross_threshold': 20,
-            'li_exclude_ren_gua': {'001'},
-            'li_allow_di_gua': {'000'},
-            'pool_threshold': -250,
-            'sell': 'bear',
-        },
-        'naked_cfg': {
-            'li_buy': True,
-            'li_buy_mode': 'double_rise',
-            'li_cross_threshold': 20,
-            'li_exclude_ren_gua': set(),
-            'li_allow_di_gua': None,
-            'pool_threshold': -250,
-            'sell': 'bear',
-        },
         'fields': {
             'market': 'li_exclude_ren_gua',
             'stock': 'li_allow_di_gua',
@@ -221,16 +224,6 @@ GUA_EXPERIMENT_SPECS: Dict[str, Dict[str, Any]] = {
     },
     '010': {
         'name': '坎',
-        'base_cfg': {
-            'grades': {'A+', 'A', 'B+', 'B', 'B-'},
-            'pool_threshold': -250,
-            'sell': 'bear',
-        },
-        'naked_cfg': {
-            'grades': {'A+', 'A', 'B+', 'B', 'B-', 'C', 'D', 'F'},
-            'pool_threshold': -250,
-            'sell': 'bear',
-        },
         'fields': {
             'market': None,
             'stock': None,
@@ -246,20 +239,6 @@ GUA_EXPERIMENT_SPECS: Dict[str, Dict[str, Any]] = {
     },
     '011': {
         'name': '巽',
-        'base_cfg': {
-            'xun_buy': 'double_rise',
-            'xun_buy_param': 11,
-            'xun_allow_di_gua': {'010'},
-            'pool_threshold': -250,
-            'sell': 'bear',
-        },
-        'naked_cfg': {
-            'xun_buy': 'double_rise',
-            'xun_buy_param': 11,
-            'xun_allow_di_gua': None,
-            'pool_threshold': -250,
-            'sell': 'bear',
-        },
         'fields': {
             'market': None,
             'stock': 'xun_allow_di_gua',
@@ -278,21 +257,6 @@ GUA_EXPERIMENT_SPECS: Dict[str, Dict[str, Any]] = {
     },
     '111': {
         'name': '乾',
-        'base_cfg': {
-            'qian_buy': True,
-            'qian_cross_threshold': 60,
-            'qian_exclude_ren_gua': set(),
-            'qian_exclude_di_gua': {'101', '111'},
-            'sell': 'qian_bull',
-        },
-        'naked_cfg': {
-            'qian_buy': True,
-            'qian_cross_threshold': 60,
-            'qian_exclude_ren_gua': set(),
-            'qian_exclude_di_gua': set(),
-            'pool_threshold': -250,
-            'sell': 'qian_bull',
-        },
         'fields': {
             'market': 'qian_exclude_ren_gua',
             'stock': 'qian_exclude_di_gua',
@@ -312,6 +276,47 @@ GUA_EXPERIMENT_SPECS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# naked_cfg 派生规则: 从 b8.GUA_STRATEGY[gua] 复制策略参数，
+# 剥离所有市场/个股过滤白名单与池底二次验证，卖法统一为 'bear'（乾除外用 qian_bull）
+_NAKED_STRIP_FIELDS = {
+    # 清空为空集 (过滤关闭)
+    '000': {'kun_exclude_ren_gua': set(), 'kun_allow_di_gua': None},
+    '001': {'gen_allow_di_gua': None},
+    '010': {},
+    '011': {'xun_allow_di_gua': None},
+    '100': {'zhen_exclude_ren_gua': set(), 'zhen_allow_di_gua': None},
+    '101': {'li_exclude_ren_gua': set(), 'li_allow_di_gua': None},
+    '110': {'dui_exclude_ren_gua': set(), 'dui_allow_di_gua': None,
+            'dui_market_stock_whitelist': None},
+    '111': {'qian_exclude_ren_gua': set(), 'qian_exclude_di_gua': set()},
+}
+# 裸跑卖法: 用户指定全部统一 'bear'
+_NAKED_SELL = {g: 'bear' for g in ['000', '001', '010', '011', '100', '101', '110', '111']}
+
+
+def derive_naked_cfg(gua: str) -> Dict[str, Any]:
+    """从 b8.GUA_STRATEGY[gua] 派生 naked 配置 (Single Source of Truth)
+
+    规则:
+      1. 复制策略参数 (pool_threshold, 各买入模式/阈值, 独立分支标记等)
+      2. 将所有过滤白名单清空 (allow 类 → None, exclude 类 → set())
+      3. pool_depth 置 None (裸跑不走二次验证)
+      4. sell 统一为 'bear'
+      5. active=True (强制启用)
+    """
+    if gua not in b8.GUA_STRATEGY:
+        raise ValueError(f'未知卦 {gua}')
+    base = copy.deepcopy(b8.GUA_STRATEGY[gua])
+    for k, v in _NAKED_STRIP_FIELDS.get(gua, {}).items():
+        base[k] = copy.deepcopy(v) if isinstance(v, (set, dict, list)) else v
+    base['pool_depth'] = None
+    # pool_depth_tiers 保留: 当 GUA_STRATEGY 配了 tiers, 视为"固化的裸跑基准";
+    # 没配 tiers 的卦, base 里就不会有这个 key, 行为等同原始裸跑。
+    base['sell'] = _NAKED_SELL.get(gua, 'bear')
+    base['active'] = True
+    return base
+
+
 def freeze_value(value: Any):
     if isinstance(value, set):
         return tuple(sorted(value))
@@ -325,20 +330,6 @@ def freeze_value(value: Any):
 def make_cfg_key(gua: str, cfg: Dict[str, Any]) -> Tuple[str, Tuple[Tuple[str, Any], ...]]:
     return gua, tuple(sorted((k, freeze_value(v)) for k, v in cfg.items()))
 
-
-def classify_dui_pair_tier(ren_gua: str, di_gua: str) -> str:
-    ren_gua = str(ren_gua).zfill(3)
-    di_gua = str(di_gua).zfill(3)
-    if (ren_gua, di_gua) in {
-        ('000', '000'), ('000', '001'), ('000', '010'),
-        ('001', '000'), ('001', '010'), ('110', '110'),
-    }:
-        return 'tier1'
-    if (ren_gua, di_gua) in {
-        ('011', '010'), ('011', '011'),
-    }:
-        return 'tier2'
-    return 'tier3'
 
 
 def apply_dui_rank_fields(sig: pd.DataFrame) -> pd.DataFrame:
@@ -410,7 +401,10 @@ def format_gua_set(values: Optional[Iterable[str]]) -> str:
 def get_spec(gua: str) -> Dict[str, Any]:
     if gua not in GUA_EXPERIMENT_SPECS:
         raise ValueError(f'暂未支持卦 {gua} 的通用分析，请先补充 GUA_EXPERIMENT_SPECS')
-    return GUA_EXPERIMENT_SPECS[gua]
+    spec = dict(GUA_EXPERIMENT_SPECS[gua])
+    # naked_cfg 从 GUA_STRATEGY 实时派生，确保 Single Source of Truth
+    spec['naked_cfg'] = derive_naked_cfg(gua)
+    return spec
 
 
 def load_runtime_context() -> Dict[str, Any]:
@@ -456,14 +450,8 @@ def load_runtime_context() -> Dict[str, Any]:
 
 
 def enrich_signals(sig):
-    sig = sig[(sig['signal_date'] >= b8.YEAR_START) &
-              (sig['signal_date'] < b8.YEAR_END)].reset_index(drop=True)
-    sig = b8.build_512_rolling_pred(sig, min_hist=b8.MIN_512_SAMPLES)
-    sig['grade'] = [b8.grade_signal(r['gua_yy'], r['combo_pred'])[0]
-                    for _, r in sig.iterrows()]
-    if b8.ACTUAL_GRADE_GUAS:
-        sig = b8.build_actual_rolling_pred(sig, b8.ACTUAL_GRADE_GUAS, min_hist=3)
-    return sig
+    return sig[(sig['signal_date'] >= b8.YEAR_START) &
+               (sig['signal_date'] < b8.YEAR_END)].reset_index(drop=True)
 
 
 def clone_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -511,21 +499,13 @@ def build_dui_test_baseline_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
         snapshot = json.load(f)
     raw = (snapshot.get('payloads') or {}).get('110') or {}
     sig = pd.DataFrame(raw.get('detail_signals', [])).copy()
+    compat_rename_columns(sig)
     for col in ['tian_gua', 'gua', 'ren_gua', 'di_gua', 'combo']:
         if col in sig.columns:
             sig[col] = sig[col].astype(str).str.zfill(3)
-    if 'di_gua' not in sig.columns and 'stk_gua' in sig.columns:
-        sig['di_gua'] = sig['stk_gua']
-    if 'stk_gua' not in sig.columns:
-        sig['stk_gua'] = sig['di_gua']
-    else:
-        sig['stk_gua'] = sig['stk_gua'].astype(str).str.zfill(3)
-    if 'stk_yy' not in sig.columns and 'di_gua' in sig.columns:
-        sig['stk_yy'] = sig['di_gua'].map(b8.to_yinyang)
     sig['tian_gua'] = '110'
     sig['gua'] = '110'
     sig['combo'] = sig['di_gua']
-    sig['gua_yy'] = sig['stk_yy']
     sig['sell_method'] = 'bear'
     sig['is_skip'] = False
     sig['ren_gua_name'] = sig['ren_gua'].map(GUA_LABELS).fillna('')
@@ -550,7 +530,7 @@ def build_dui_test_baseline_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
         for _, row in trade_meta.iterrows()
     }
     for t in result['trade_log']:
-        sg = str(t.get('stk_gua', '???')).zfill(3)
+        sg = str(t.get('di_gua', '???')).zfill(3)
         mg = trade_lookup.get((str(t.get('code')), str(t.get('buy_date')), sg), '???')
         t['gua'] = '110'
         t['ren_gua'] = mg
@@ -575,8 +555,14 @@ def build_dui_test_baseline_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 def build_payload_for_cfg(gua: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
     cache_key = make_cfg_key(gua, cfg)
+    # 第一层: 进程内内存缓存
     if cache_key in PAYLOAD_CACHE:
         return clone_payload(PAYLOAD_CACHE[cache_key])
+    # 第二层: 跨进程磁盘缓存 (同参数 + 同数据版本)
+    disk_payload = _load_disk_cache(gua, cfg)
+    if disk_payload is not None:
+        PAYLOAD_CACHE[cache_key] = disk_payload
+        return clone_payload(disk_payload)
 
     runtime = load_runtime_context()
     old_strat = copy.deepcopy(b8.GUA_STRATEGY[gua])
@@ -595,8 +581,11 @@ def build_payload_for_cfg(gua: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
             sig = enrich_signals(sig)
             sig = apply_dui_rank_fields(sig)
             sig = apply_li_rank_fields(sig)
+            # 统一天卦口径: simulate 默认用 zz1000 的 2 线天卦, scan 用 market_bagua 5 维天卦
+            # 不传 tian_gua_map_ext 会导致 trade.gua 按 zz1000 打标, 和 signal.tian_gua 不同源
             result = b8.simulate_8gua(sig, runtime['zz_df'], max_pos=5, daily_limit=1,
-                                      init_capital=b8.INIT_CAPITAL)
+                                      init_capital=b8.INIT_CAPITAL,
+                                      tian_gua_map_ext=runtime['tian_gua_map'])
             stats = b8.calc_stats(result, f"{GUA_LABELS.get(gua, gua)}实验")
     finally:
         b8.GUA_STRATEGY[gua] = old_strat
@@ -611,6 +600,7 @@ def build_payload_for_cfg(gua: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
         'non_target_sig': sig[sig['tian_gua'] != gua].copy().reset_index(drop=True),
     }
     PAYLOAD_CACHE[cache_key] = clone_payload(payload)
+    _save_disk_cache(gua, cfg, clone_payload(payload))
     return clone_payload(payload)
 
 
@@ -622,7 +612,8 @@ def simulate_case_from_filtered_target(gua: str, base_payload: Dict[str, Any], f
     merged = apply_li_rank_fields(merged)
     with contextlib.redirect_stdout(io.StringIO()):
         result = b8.simulate_8gua(merged, runtime['zz_df'], max_pos=5, daily_limit=1,
-                                  init_capital=b8.INIT_CAPITAL)
+                                  init_capital=b8.INIT_CAPITAL,
+                                  tian_gua_map_ext=runtime['tian_gua_map'])
         stats = b8.calc_stats(result, f"{GUA_LABELS.get(gua, gua)}卦分析")
     return {
         'sig': merged,

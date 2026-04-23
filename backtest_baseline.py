@@ -20,14 +20,10 @@ sys.stdout = io.TextIOWrapper(
 
 from backtest_capital import (
     load_zz1000, load_zz1000_full, load_stocks,
-    calc_sell_bear, to_yinyang,
+    calc_sell_bear,
     YEAR_START, YEAR_END, INIT_CAPITAL, DATA_DIR,
 )
-
-GUA_NAMES = {
-    '000': '坤', '001': '艮', '010': '坎', '011': '巽',
-    '100': '震', '101': '离', '110': '兑', '111': '乾',
-}
+from data_layer.gua_data import clean_gua as _clean_gua, GUA_NAMES
 
 POOL_THRESHOLD = -250
 POOL_THRESHOLD_BY_GUA = {
@@ -42,19 +38,10 @@ POOL_THRESHOLD_BY_GUA = {
 }
 
 
-def _clean_gua(val):
-    s = str(val).strip()
-    if s in ('nan', 'None', ''):
-        return '???'
-    if '.' in s:
-        s = s.split('.')[0]
-    return s.zfill(3) if s else '???'
-
-
 # ============================================================
 # 信号扫描 — 趋势线上穿11 + 统一bear卖
 # ============================================================
-def scan_signals_baseline(stock_data, zz_gua_map):
+def scan_signals_baseline(stock_data, ren_gua_map):
     """
     入池: 按中证目标卦读取独立初始入池阈值
     买入: 趋势线上穿11 (trend[i-1] < 11 and trend[i] >= 11)
@@ -77,9 +64,9 @@ def scan_signals_baseline(stock_data, zz_gua_map):
 
         for i in range(1, len(df)):
             dt_str = str(dates[i])
-            zz_gua = zz_gua_map.get(dt_str, '???')
+            ren_gua = ren_gua_map.get(dt_str, '???')
 
-            current_pool_threshold = POOL_THRESHOLD_BY_GUA.get(zz_gua, POOL_THRESHOLD)
+            current_pool_threshold = POOL_THRESHOLD_BY_GUA.get(ren_gua, POOL_THRESHOLD)
 
             # --- 入池逻辑 ---
             if not pooled:
@@ -125,7 +112,7 @@ def scan_signals_baseline(stock_data, zz_gua_map):
                 pool_retail = 0
                 continue
 
-            stk_gua = _clean_gua(df['gua'].iloc[i])
+            di_gua = _clean_gua(df['gua'].iloc[i])
 
             all_signals.append({
                 'code': code,
@@ -137,9 +124,8 @@ def scan_signals_baseline(stock_data, zz_gua_map):
                 'actual_ret': (sell_price / buy_price - 1) * 100,
                 'hold_days': hold_days,
                 'pool_retail': pool_retail,
-                'zz_gua': zz_gua,
-                'stk_gua': stk_gua,
-                'stk_yy': to_yinyang(stk_gua),
+                'ren_gua': ren_gua,
+                'di_gua': di_gua,
             })
 
             # 上穿触发 → 出池清零
@@ -156,9 +142,9 @@ def simulate_baseline(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None
     capital = init_capital or INIT_CAPITAL
 
     # 构建中证象卦映射
-    zz_gua_map = {}
+    ren_gua_map = {}
     for _, row in zz_df.iterrows():
-        zz_gua_map[row['date']] = _clean_gua(row['gua'])
+        ren_gua_map[row['date']] = _clean_gua(row['gua'])
 
     sig_by_date = {}
     for _, row in sig_df.iterrows():
@@ -185,8 +171,8 @@ def simulate_baseline(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None
                     'sell_price': pos['sell_price'],
                     'ret_pct': (pos['sell_price'] / pos['buy_price'] - 1) * 100,
                     'hold_days': pos['hold_days'],
-                    'zz_gua': pos.get('zz_gua', '???'),
-                    'stk_gua': pos.get('stk_gua', '???'),
+                    'ren_gua': pos.get('ren_gua', '???'),
+                    'di_gua': pos.get('di_gua', '???'),
                 })
             else:
                 new_pos.append(pos)
@@ -213,8 +199,8 @@ def simulate_baseline(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None
                         'sell_date': c['sell_date'], 'buy_price': c['buy_price'],
                         'sell_price': c['sell_price'], 'cost': cost,
                         'hold_days': c['hold_days'],
-                        'zz_gua': c.get('zz_gua', '???'),
-                        'stk_gua': c.get('stk_gua', '???'),
+                        'ren_gua': c.get('ren_gua', '???'),
+                        'di_gua': c.get('di_gua', '???'),
                     })
 
         # 3. 记录净值 + 当日持仓卦分布
@@ -222,7 +208,7 @@ def simulate_baseline(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None
         daily_equity.append({
             'date': dt, 'cash': capital, 'hold_value': hold_val,
             'total_equity': capital + hold_val, 'n_positions': len(positions),
-            'zz_gua': zz_gua_map.get(dt, '???'),
+            'ren_gua': ren_gua_map.get(dt, '???'),
         })
 
     # 清仓
@@ -236,8 +222,8 @@ def simulate_baseline(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None
             'sell_price': pos['sell_price'],
             'ret_pct': (pos['sell_price'] / pos['buy_price'] - 1) * 100,
             'hold_days': pos['hold_days'],
-            'zz_gua': pos.get('zz_gua', '???'),
-            'stk_gua': pos.get('stk_gua', '???'),
+            'ren_gua': pos.get('ren_gua', '???'),
+            'di_gua': pos.get('di_gua', '???'),
         })
 
     _init = init_capital or INIT_CAPITAL
@@ -268,13 +254,13 @@ def run(start_date=None, end_date=None, init_capital=None):
     print(f"  个股: {len(stock_data)} 只")
 
     # 构建中证象卦映射
-    zz_gua_map = {}
+    ren_gua_map = {}
     for _, row in zz_df.iterrows():
-        zz_gua_map[row['date']] = _clean_gua(row['gua'])
+        ren_gua_map[row['date']] = _clean_gua(row['gua'])
 
     # 2. 扫描信号
     print("\n[2] 扫描基线信号 (上穿11 + bear卖)...")
-    sig = scan_signals_baseline(stock_data, zz_gua_map)
+    sig = scan_signals_baseline(stock_data, ren_gua_map)
     sig = sig[(sig['signal_date'] >= year_start) &
               (sig['signal_date'] < year_end)].reset_index(drop=True)
     print(f"  总信号: {len(sig)}")
@@ -284,7 +270,7 @@ def run(start_date=None, end_date=None, init_capital=None):
     print(f"  {'卦':<12} {'信号数':>6} {'均收益%':>8} {'中位收益%':>9} {'胜率%':>6} {'均持仓天':>8}")
     print("  " + "-" * 56)
     for gua in ['000', '001', '010', '011', '100', '101', '110', '111']:
-        sub = sig[sig['zz_gua'] == gua]
+        sub = sig[sig['ren_gua'] == gua]
         if len(sub) == 0:
             print(f"  {gua} {GUA_NAMES[gua]:<6} {0:>6}")
             continue
@@ -299,7 +285,7 @@ def run(start_date=None, end_date=None, init_capital=None):
     print(f"  {'卦':<12} {'信号数':>6} {'均收益%':>8} {'中位收益%':>9} {'胜率%':>6}")
     print("  " + "-" * 48)
     for gua in ['000', '001', '010', '011', '100', '101', '110', '111']:
-        sub = sig[sig['stk_gua'] == gua]
+        sub = sig[sig['di_gua'] == gua]
         if len(sub) == 0:
             print(f"  {gua} {GUA_NAMES[gua]:<6} {0:>6}")
             continue
@@ -317,9 +303,9 @@ def run(start_date=None, end_date=None, init_capital=None):
     print("  " + "-" * (8 + 7 * 8 + 8))
     for zg in gua_list:
         row = f"  {GUA_NAMES[zg]:<8}"
-        zz_sub = sig[sig['zz_gua'] == zg]
+        zz_sub = sig[sig['ren_gua'] == zg]
         for sg in gua_list:
-            cross = zz_sub[zz_sub['stk_gua'] == sg]
+            cross = zz_sub[zz_sub['di_gua'] == sg]
             if len(cross) >= 3:
                 row += f"  {cross['actual_ret'].mean():>+5.1f}"
             elif len(cross) > 0:
@@ -331,15 +317,6 @@ def run(start_date=None, end_date=None, init_capital=None):
         else:
             row += f"  {'--':>6}"
         print(row)
-
-    # 阴阳统计
-    print(f"\n  === 个股阴阳统计 ===")
-    for yy in ['阴', '阳']:
-        sub = sig[sig['stk_yy'] == yy]
-        if len(sub) > 0:
-            print(f"  {yy}: {len(sub)}笔, 均收益{sub['actual_ret'].mean():>+.2f}%, "
-                  f"中位{sub['actual_ret'].median():>+.2f}%, "
-                  f"胜率{(sub['actual_ret']>0).mean()*100:.1f}%")
 
     # 3. 模拟(无过滤, 全进全出)
     print(f"\n[3] 模拟 (5仓, 每日限买1笔, 无过滤)...")
@@ -393,8 +370,8 @@ def run(start_date=None, end_date=None, init_capital=None):
           f"{'利润':>14} {'占比%':>6} {'均持仓':>6} {'日均仓':>6}")
     print("  " + "-" * 90)
     for gua in ['000', '001', '010', '011', '100', '101', '110', '111']:
-        sig_count = len(sig[sig['zz_gua'] == gua])
-        gua_trades = [t for t in trades if t.get('zz_gua') == gua]
+        sig_count = len(sig[sig['ren_gua'] == gua])
+        gua_trades = [t for t in trades if t.get('ren_gua') == gua]
         if not gua_trades:
             print(f"  {gua} {GUA_NAMES[gua]:<6} {sig_count:>6} {0:>6}")
             continue
@@ -451,7 +428,7 @@ def run(start_date=None, end_date=None, init_capital=None):
     print(f"\n{header}")
     print("  " + "-" * (10 + 10 * len(years) + 12))
     for gua in gua_list:
-        gua_trades = [t for t in trades if t.get('zz_gua') == gua]
+        gua_trades = [t for t in trades if t.get('ren_gua') == gua]
         row = f"  {gua} {GUA_NAMES[gua]:<5}"
         total = 0
         for y in years:
@@ -468,7 +445,7 @@ def run(start_date=None, end_date=None, init_capital=None):
     print(header2)
     print("  " + "-" * (10 + 6 * len(years) + 8))
     for gua in gua_list:
-        gua_trades = [t for t in trades if t.get('zz_gua') == gua]
+        gua_trades = [t for t in trades if t.get('ren_gua') == gua]
         row = f"  {gua} {GUA_NAMES[gua]:<5}"
         total_n = 0
         for y in years:

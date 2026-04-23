@@ -16,7 +16,8 @@ import pandas as pd
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from data_layer.foundation_data import load_daily_cross_section, load_market_bagua, load_macro_bagua
+from data_layer.foundation_data import load_daily_cross_section, load_market_bagua
+from data_layer.gua_data import GUA_DISPLAY_NAMES as GUA_NAMES, GUA_ORDER, compat_rename_columns
 import experiment_gua as eg
 import backtest_8gua as b8
 import backtest_baseline as bb
@@ -30,11 +31,6 @@ STOCKS_DIR = os.path.join(DATA_DIR, 'stocks')
 SNAP_PATH = os.path.join(PROJECT_ROOT, 'live', 'snapshots', 'latest.json')
 BAGUA_DEBUG_BASELINE_SNAPSHOT_PATH = os.path.join(DATA_DIR, 'bagua_debug_baseline_snapshot.json')
 
-# 八卦名称映射
-GUA_NAMES = {
-    '000': '坤(至暗)', '001': '艮(蓄力)', '010': '坎(弱反弹)', '011': '巽(反转)',
-    '100': '震(暴跌)', '101': '离(护盘)', '110': '兑(滞涨)', '111': '乾(牛顶)',
-}
 TIAN_GUA_NAMES = {k: '天' + v for k, v in GUA_NAMES.items()}
 REN_GUA_NAMES = {k: '人' + v for k, v in GUA_NAMES.items()}
 DI_GUA_NAMES = {k: '地' + v for k, v in GUA_NAMES.items()}
@@ -47,10 +43,6 @@ GUA_MEANINGS = {
     '100': '雷霆坠落', '101': '主力护盘', '110': '散户狂欢', '111': '如日中天',
 }
 
-MACRO_GUA_MEANINGS = {
-    '000': '深熊压制', '001': '熊底蓄力', '010': '弱修复未稳', '011': '牛初扩散',
-    '100': '高位转弱', '101': '高位护盘', '110': '牛末滞涨', '111': '主升扩张',
-}
 
 
 def _load_regime_visual(load_fn, numeric_cols, start_date=None, end_date=None):
@@ -200,7 +192,7 @@ def load_signals_by_date(date_str):
     """获取指定日期的全部信号
 
     Returns: dict with keys:
-        'signals': DataFrame - 当日全部信号（含被skip/grade过滤的）
+        'signals': DataFrame - 当日全部信号（含被skip过滤的）
         'date': str - 查询日期
         'total': int - 信号总数
         'by_gua': dict - 按中证大象卦分组统计
@@ -219,7 +211,6 @@ def load_signals_by_date(date_str):
             by_gua[gua] = {
                 'total': len(grp),
                 'non_skip': int((~grp['is_skip']).sum()),
-                'grades': grp['grade'].value_counts().to_dict(),
             }
 
     return {
@@ -239,7 +230,7 @@ def load_trades_by_date(date_str):
     return df_trades[mask].copy()
 
 
-BAGUA_ORDER = ['000', '001', '010', '011', '100', '101', '110', '111']
+BAGUA_ORDER = GUA_ORDER
 ZONE_COLOR_MAP = {
     'buy': '#7f1d1d',
     'ban': '#14532d',
@@ -457,19 +448,9 @@ def load_bagua_debug_frames(source='8gua', use_experiment_baseline=False):
     sigs = bt.get('all_signals') or bt.get('signal_detail') or []
     df_signals = pd.DataFrame(sigs)
     if len(df_signals) > 0:
-        if 'gua' not in df_signals.columns and 'zz_gua' in df_signals.columns:
-            df_signals['gua'] = df_signals['zz_gua']
-        # 兼容旧JSON：旧列名 → 新列名
-        if 'tian_gua' not in df_signals.columns and 'zz_gua' in df_signals.columns:
-            df_signals['tian_gua'] = df_signals['zz_gua']
-        if 'ren_gua' not in df_signals.columns and 'market_gua' in df_signals.columns:
-            df_signals['ren_gua'] = df_signals['market_gua']
-        if 'ren_gua_name' not in df_signals.columns and 'market_gua_name' in df_signals.columns:
-            df_signals['ren_gua_name'] = df_signals['market_gua_name']
-        if 'di_gua' not in df_signals.columns and 'stock_gua' in df_signals.columns:
-            df_signals['di_gua'] = df_signals['stock_gua']
-        if 'di_gua_name' not in df_signals.columns and 'stock_gua_name' in df_signals.columns:
-            df_signals['di_gua_name'] = df_signals['stock_gua_name']
+        compat_rename_columns(df_signals)
+        if 'gua' not in df_signals.columns and 'tian_gua' in df_signals.columns:
+            df_signals['gua'] = df_signals['tian_gua']
         for col in ['signal_date', 'buy_date', 'sell_date']:
             if col in df_signals.columns:
                 df_signals[col] = pd.to_datetime(df_signals[col], format='mixed', errors='coerce')
@@ -484,15 +465,7 @@ def load_bagua_debug_frames(source='8gua', use_experiment_baseline=False):
     if df_trades is None:
         df_trades = pd.DataFrame()
     elif len(df_trades) > 0:
-        # 兼容旧JSON：旧列名 → 新列名
-        if 'ren_gua' not in df_trades.columns and 'market_gua' in df_trades.columns:
-            df_trades['ren_gua'] = df_trades['market_gua']
-        if 'ren_gua_name' not in df_trades.columns and 'market_gua_name' in df_trades.columns:
-            df_trades['ren_gua_name'] = df_trades['market_gua_name']
-        if 'di_gua' not in df_trades.columns and 'stock_gua' in df_trades.columns:
-            df_trades['di_gua'] = df_trades['stock_gua']
-        if 'di_gua_name' not in df_trades.columns and 'stock_gua_name' in df_trades.columns:
-            df_trades['di_gua_name'] = df_trades['stock_gua_name']
+        compat_rename_columns(df_trades)
         if 'tian_gua' not in df_trades.columns and 'gua' in df_trades.columns:
             df_trades['tian_gua'] = df_trades['gua']
         for col in ['gua', 'ren_gua', 'di_gua', 'macro_gua']:
@@ -544,22 +517,22 @@ def build_bagua_zone_rules(gua_strategy):
         for key, value in strat.items():
             if 'exclude_ren_gua' in key:
                 exclude_ren |= _parse_gua_set(value)
-            elif 'allow_stk_gua' in key:
+            elif 'allow_di_gua' in key:
                 allow_stock |= _parse_gua_set(value)
-            elif 'exclude_stk_gua' in key:
+            elif 'exclude_di_gua' in key:
                 exclude_stock |= _parse_gua_set(value)
         rules[gua] = {
             'exclude_ren_gua': exclude_ren,
-            'allow_stk_gua': allow_stock,
-            'exclude_stk_gua': exclude_stock,
+            'allow_di_gua': allow_stock,
+            'exclude_di_gua': exclude_stock,
             'strategy': strat,
         }
     return rules
 
 
-@st.cache_data(ttl=300)
-def build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=False):
-    """构建单个目标卦的 64 卦联动矩阵。"""
+@st.cache_data(ttl=None)
+def build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=False, data_version=''):
+    """构建单个目标卦的 64 卦联动矩阵。data_version 由调用方传入，数据变更时变化以失效缓存。"""
     target_gua = str(target_gua).zfill(3)
 
     if use_experiment_baseline:
@@ -567,12 +540,8 @@ def build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=
         payload = eg.build_payload_for_cfg(target_gua, copy.deepcopy(spec['naked_cfg']))
         signal_df = payload['target_sig'].copy()
         trade_df = eg.build_trade_detail(payload['result'], target_gua).copy()
-        _compat = {'zz_gua': 'tian_gua', 'market_gua': 'ren_gua', 'stock_gua': 'di_gua'}
         for _df in (signal_df, trade_df):
-            if len(_df) > 0:
-                for _old, _new in _compat.items():
-                    if _new not in _df.columns and _old in _df.columns:
-                        _df[_new] = _df[_old]
+            compat_rename_columns(_df)
         signal_df['gua'] = signal_df['tian_gua'].astype(str).str.zfill(3)
         signal_df['ren_gua'] = signal_df['ren_gua'].astype(str).str.zfill(3)
         signal_df['di_gua'] = signal_df['di_gua'].astype(str).str.zfill(3)
@@ -597,7 +566,7 @@ def build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=
     else:
         formal_signal_group = pd.DataFrame(columns=['ren_gua', 'di_gua', 'can_buy_count'])
     try:
-        _baseline = _build_baseline_debug_matrix(target_gua)
+        _baseline = _build_baseline_debug_matrix(target_gua, data_version=data_version)
         naked_signal_group = _baseline['matrix_df'][['ren_gua', 'di_gua', 'signal_count', 'signal_avg_ret']].copy()
         naked_detail_signals = _baseline.get('detail_signals', pd.DataFrame()).copy()
     except (KeyError, FileNotFoundError):
@@ -633,8 +602,8 @@ def build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=
 
     rule = rules.get(target_gua, {})
     blocked = rule.get('exclude_ren_gua', set())
-    allow_stock = rule.get('allow_stk_gua', set())
-    exclude_stock = rule.get('exclude_stk_gua', set())
+    allow_stock = rule.get('allow_di_gua', set())
+    exclude_stock = rule.get('exclude_di_gua', set())
 
     matrix_df = _apply_rank_fields(matrix_df)
 
@@ -666,9 +635,9 @@ def build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=
     }
 
 
-@st.cache_data(ttl=300)
-def build_all_bagua_debug_payload(source='8gua'):
-    return {gua: build_bagua_debug_matrix(gua, source=source) for gua in BAGUA_ORDER}
+@st.cache_data(ttl=None)
+def build_all_bagua_debug_payload(source='8gua', data_version=''):
+    return {gua: build_bagua_debug_matrix(gua, source=source, data_version=data_version) for gua in BAGUA_ORDER}
 
 
 DEBUG_DATASET_CONFIG = {
@@ -732,9 +701,10 @@ def _apply_buy_case_to_cfg(target_gua, runtime_cfg, buy_case):
     return runtime_cfg
 
 
-def _get_test_runtime_cfg(target_gua, buy_case=None, pool_threshold=None, sell=None, pool_days_min=None, pool_days_max=None):
+def _get_test_runtime_cfg(target_gua, buy_case=None, pool_threshold=None, sell=None, pool_days_min=None, pool_days_max=None, pool_depth=None):
     target_gua = str(target_gua).zfill(3)
     spec = eg.get_spec(target_gua)
+    # naked_cfg 现在已包含 tiers (derive_naked_cfg 不再 pop), 不需要再单独注入
     runtime_cfg = copy.deepcopy(spec['naked_cfg'])
     runtime_cfg = _apply_buy_case_to_cfg(target_gua, runtime_cfg, buy_case)
     if pool_threshold is not None:
@@ -745,29 +715,32 @@ def _get_test_runtime_cfg(target_gua, buy_case=None, pool_threshold=None, sell=N
         runtime_cfg['pool_days_min'] = pool_days_min
     if pool_days_max is not None:
         runtime_cfg['pool_days_max'] = pool_days_max
+    # pool_depth=None 沿用 naked_cfg 默认 (None = 不做二次验证)
+    # 显式传值时写入，包括传入 None 以明确关闭
+    runtime_cfg['pool_depth'] = pool_depth
     return runtime_cfg
 
 
-def _get_test_dataset_signature(target_gua, buy_case=None, pool_threshold=None, sell=None, tier1=None, tier2=None, pool_days_min=None, pool_days_max=None):
+def _get_test_dataset_signature(target_gua, buy_case=None, pool_threshold=None, sell=None, tier1=None, tier2=None, pool_days_min=None, pool_days_max=None, pool_depth=None):
     target_gua = str(target_gua).zfill(3)
     if target_gua not in eg.GUA_EXPERIMENT_SPECS:
         return None
-    base_key = eg.make_cfg_key(target_gua, _get_test_runtime_cfg(target_gua, buy_case=buy_case, pool_threshold=pool_threshold, sell=sell, pool_days_min=pool_days_min, pool_days_max=pool_days_max))
+    base_key = eg.make_cfg_key(target_gua, _get_test_runtime_cfg(target_gua, buy_case=buy_case, pool_threshold=pool_threshold, sell=sell, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth))
     return (base_key, ('tier1', tier1), ('tier2', tier2))
 
 
-@st.cache_data(ttl=300)
-def _load_baseline_debug_snapshot():
+@st.cache_data(ttl=None)
+def _load_baseline_debug_snapshot(data_version=''):
     if not os.path.exists(BAGUA_DEBUG_BASELINE_SNAPSHOT_PATH):
         raise FileNotFoundError(f'baseline snapshot missing: {BAGUA_DEBUG_BASELINE_SNAPSHOT_PATH}')
     with open(BAGUA_DEBUG_BASELINE_SNAPSHOT_PATH, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
-@st.cache_data(ttl=300)
-def _build_baseline_debug_matrix(target_gua):
+@st.cache_data(ttl=None)
+def _build_baseline_debug_matrix(target_gua, data_version=''):
     target_gua = str(target_gua).zfill(3)
-    snapshot = _load_baseline_debug_snapshot()
+    snapshot = _load_baseline_debug_snapshot(data_version=data_version)
     raw = (snapshot.get('payloads') or {}).get(target_gua)
     if raw is None:
         raise KeyError(f'baseline snapshot missing target_gua={target_gua}')
@@ -776,12 +749,8 @@ def _build_baseline_debug_matrix(target_gua):
     signal_df = pd.DataFrame(raw.get('detail_signals', []))
     trade_df = pd.DataFrame(raw.get('detail_trades', []))
 
-    _compat_map = {'market_gua': 'ren_gua', 'stock_gua': 'di_gua', 'market_name': 'ren_name', 'stock_name': 'di_name'}
     for df in (matrix_df, signal_df, trade_df):
-        if len(df) > 0:
-            for old_col, new_col in _compat_map.items():
-                if new_col not in df.columns and old_col in df.columns:
-                    df[new_col] = df[old_col]
+        compat_rename_columns(df)
 
     for df, date_cols in ((signal_df, ['signal_date', 'buy_date', 'sell_date']), (trade_df, ['buy_date', 'sell_date'])):
         if len(df) > 0:
@@ -848,15 +817,15 @@ def _build_baseline_debug_matrix(target_gua):
     }
 
 
-@st.cache_data(ttl=300)
-def _build_test_debug_matrix(target_gua, dataset_signature=None, buy_case=None, pool_threshold=None, sell=None, tier1_threshold=None, tier2_threshold=None, pool_days_min=None, pool_days_max=None):
+@st.cache_data(ttl=None)
+def _build_test_debug_matrix(target_gua, dataset_signature=None, buy_case=None, pool_threshold=None, sell=None, tier1_threshold=None, tier2_threshold=None, pool_days_min=None, pool_days_max=None, pool_depth=None, start_date=None, end_date=None, data_version=''):
     target_gua = str(target_gua).zfill(3)
     spec = eg.get_spec(target_gua)
-    runtime_cfg = _get_test_runtime_cfg(target_gua, buy_case=buy_case, pool_threshold=pool_threshold, sell=sell, pool_days_min=pool_days_min, pool_days_max=pool_days_max)
+    runtime_cfg = _get_test_runtime_cfg(target_gua, buy_case=buy_case, pool_threshold=pool_threshold, sell=sell, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth)
 
     # --- 裸跑全量: 直接读快照，与正式/裸跑基准口径一致 ---
     try:
-        _baseline = _build_baseline_debug_matrix(target_gua)
+        _baseline = _build_baseline_debug_matrix(target_gua, data_version=data_version)
         naked_signal_group = _baseline['matrix_df'][['ren_gua', 'di_gua', 'signal_count', 'signal_avg_ret']].copy()
     except (KeyError, FileNotFoundError):
         naked_signal_group = pd.DataFrame(columns=['ren_gua', 'di_gua', 'signal_count', 'signal_avg_ret'])
@@ -865,17 +834,20 @@ def _build_test_debug_matrix(target_gua, dataset_signature=None, buy_case=None, 
     test_payload = eg.build_payload_for_cfg(target_gua, copy.deepcopy(runtime_cfg))
     signal_df = test_payload['target_sig'].copy()
 
-    _sig_compat = {'zz_gua': 'tian_gua', 'market_gua': 'ren_gua', 'stock_gua': 'di_gua'}
-    for _df in (signal_df,):
-        if len(_df) > 0:
-            for _old, _new in _sig_compat.items():
-                if _new not in _df.columns and _old in _df.columns:
-                    _df[_new] = _df[_old]
+    compat_rename_columns(signal_df)
 
     if len(signal_df) > 0:
         signal_df['gua'] = signal_df['tian_gua'].astype(str).str.zfill(3)
         signal_df['ren_gua'] = signal_df['ren_gua'].astype(str).str.zfill(3)
         signal_df['di_gua'] = signal_df['di_gua'].astype(str).str.zfill(3)
+
+    if len(signal_df) > 0 and (start_date or end_date):
+        sig_dates = pd.to_datetime(signal_df['signal_date'], errors='coerce')
+        if start_date:
+            signal_df = signal_df[sig_dates >= pd.Timestamp(start_date)]
+        if end_date:
+            sig_dates = pd.to_datetime(signal_df['signal_date'], errors='coerce')
+            signal_df = signal_df[sig_dates <= pd.Timestamp(end_date)]
 
     if len(signal_df) > 0:
         if 'is_skip' in signal_df.columns:
@@ -922,9 +894,7 @@ def _build_test_debug_matrix(target_gua, dataset_signature=None, buy_case=None, 
         meta = test_payload['stats']
 
     if len(trade_df) > 0:
-        for _old, _new in _sig_compat.items():
-            if _new not in trade_df.columns and _old in trade_df.columns:
-                trade_df[_new] = trade_df[_old]
+        compat_rename_columns(trade_df)
         trade_df['gua'] = trade_df['gua'].astype(str).str.zfill(3)
         trade_df['ren_gua'] = trade_df['ren_gua'].astype(str).str.zfill(3)
         trade_df['di_gua'] = trade_df['di_gua'].astype(str).str.zfill(3)
@@ -954,7 +924,7 @@ def _build_test_debug_matrix(target_gua, dataset_signature=None, buy_case=None, 
     matrix_df = _apply_rank_fields(matrix_df)
 
     try:
-        _bl = _build_baseline_debug_matrix(target_gua)
+        _bl = _build_baseline_debug_matrix(target_gua, data_version=data_version)
         naked_detail_signals = _bl.get('detail_signals', pd.DataFrame()).copy()
     except (KeyError, FileNotFoundError):
         naked_detail_signals = pd.DataFrame()
@@ -989,38 +959,52 @@ def _build_test_debug_matrix(target_gua, dataset_signature=None, buy_case=None, 
     }
 
 
-def _baseline_params_match_snapshot(target_gua, buy_case, pool_threshold, sell, pool_days_min, pool_days_max):
+def _baseline_params_match_snapshot(target_gua, buy_case, pool_threshold, sell, pool_days_min, pool_days_max, pool_depth=None):
     target_gua = str(target_gua).zfill(3)
     if target_gua not in eg.GUA_EXPERIMENT_SPECS:
         return True
-    runtime_cfg = _get_test_runtime_cfg(target_gua, buy_case=buy_case, pool_threshold=pool_threshold, sell=sell, pool_days_min=pool_days_min, pool_days_max=pool_days_max)
+    runtime_cfg = _get_test_runtime_cfg(target_gua, buy_case=buy_case, pool_threshold=pool_threshold, sell=sell, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth)
     naked_cfg = copy.deepcopy(eg.get_spec(target_gua)['naked_cfg'])
+    # naked_cfg 已包含 tiers, runtime_cfg 从 naked_cfg 派生, tiers 天然一致, 不需特殊 strip
     return eg.make_cfg_key(target_gua, runtime_cfg) == eg.make_cfg_key(target_gua, naked_cfg)
 
 
-@st.cache_data(ttl=300)
 
-def build_bagua_debug_matrix_for_dataset(target_gua, dataset_key='formal', test_buy_case=None, test_pool_threshold=None, test_sell=None, tier1_threshold=None, tier2_threshold=None, pool_days_min=None, pool_days_max=None):
+@st.cache_data(ttl=None)
+def build_bagua_debug_matrix_for_dataset(target_gua, dataset_key='formal', test_buy_case=None, test_pool_threshold=None, test_sell=None, tier1_threshold=None, tier2_threshold=None, pool_days_min=None, pool_days_max=None, pool_depth=None, start_date=None, end_date=None, data_version=''):
     dataset_key = dataset_key if dataset_key in DEBUG_DATASET_CONFIG else 'formal'
     fallback_dataset_key = None
     if dataset_key == 'formal':
-        payload = build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=False)
+        payload = build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=False, data_version=data_version)
     elif dataset_key == 'baseline':
         target_gua_str = str(target_gua).zfill(3)
-        if target_gua_str in eg.GUA_EXPERIMENT_SPECS and not _baseline_params_match_snapshot(target_gua_str, test_buy_case, test_pool_threshold, test_sell, pool_days_min, pool_days_max):
-            sig = _get_test_dataset_signature(target_gua, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1=None, tier2=None, pool_days_min=pool_days_min, pool_days_max=pool_days_max)
-            payload = _build_test_debug_matrix(target_gua, dataset_signature=sig, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1_threshold=None, tier2_threshold=None, pool_days_min=pool_days_min, pool_days_max=pool_days_max)
+        if target_gua_str in eg.GUA_EXPERIMENT_SPECS and not _baseline_params_match_snapshot(target_gua_str, test_buy_case, test_pool_threshold, test_sell, pool_days_min, pool_days_max, pool_depth):
+            sig = _get_test_dataset_signature(target_gua, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1=None, tier2=None, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth)
+            payload = _build_test_debug_matrix(target_gua, dataset_signature=sig, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1_threshold=None, tier2_threshold=None, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth, data_version=data_version)
         else:
-            payload = _build_baseline_debug_matrix(target_gua)
+            payload = _build_baseline_debug_matrix(target_gua, data_version=data_version)
     else:
         if str(target_gua).zfill(3) in eg.GUA_EXPERIMENT_SPECS:
-            sig = _get_test_dataset_signature(target_gua, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1=tier1_threshold, tier2=tier2_threshold, pool_days_min=pool_days_min, pool_days_max=pool_days_max)
-            payload = _build_test_debug_matrix(target_gua, dataset_signature=sig, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1_threshold=tier1_threshold, tier2_threshold=tier2_threshold, pool_days_min=pool_days_min, pool_days_max=pool_days_max)
+            sig = _get_test_dataset_signature(target_gua, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1=tier1_threshold, tier2=tier2_threshold, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth)
+            payload = _build_test_debug_matrix(target_gua, dataset_signature=sig, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1_threshold=tier1_threshold, tier2_threshold=tier2_threshold, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth, start_date=start_date, end_date=end_date, data_version=data_version)
         else:
-            payload = build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=False)
+            payload = build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=False, data_version=data_version)
             fallback_dataset_key = 'formal'
 
     payload = copy.deepcopy(payload)
+
+    if start_date or end_date:
+        for detail_key, date_col in [('detail_signals', 'signal_date'), ('detail_can_buy_signals', 'signal_date'), ('detail_trades', 'buy_date')]:
+            df = payload.get(detail_key)
+            if df is not None and len(df) > 0 and date_col in df.columns:
+                dates = pd.to_datetime(df[date_col], errors='coerce')
+                mask = pd.Series(True, index=df.index)
+                if start_date:
+                    mask &= dates >= pd.Timestamp(start_date)
+                if end_date:
+                    mask &= dates <= pd.Timestamp(end_date)
+                payload[detail_key] = df[mask].reset_index(drop=True)
+
     payload['dataset'] = get_bagua_debug_dataset_config(dataset_key)
     payload['fallback_dataset_key'] = fallback_dataset_key
     payload['date_range'] = extract_payload_date_range(payload)
@@ -1028,8 +1012,8 @@ def build_bagua_debug_matrix_for_dataset(target_gua, dataset_key='formal', test_
     return payload
 
 
-@st.cache_data(ttl=300)
-def build_all_bagua_debug_payload_for_dataset(dataset_key='formal', test_buy_case=None, test_pool_threshold=None, test_pool_thresholds=None, test_buy_cases=None, test_sell_methods=None, test_tier1_thresholds=None, test_tier2_thresholds=None, test_pool_days_mins=None, test_pool_days_maxs=None):
+@st.cache_data(ttl=None)
+def build_all_bagua_debug_payload_for_dataset(dataset_key='formal', test_buy_case=None, test_pool_threshold=None, test_pool_thresholds=None, test_buy_cases=None, test_sell_methods=None, test_tier1_thresholds=None, test_tier2_thresholds=None, test_pool_days_mins=None, test_pool_days_maxs=None, test_pool_depths=None, start_date=None, end_date=None, data_version=''):
     result = {}
     for gua in BAGUA_ORDER:
         pt = None
@@ -1049,7 +1033,8 @@ def build_all_bagua_debug_payload_for_dataset(dataset_key='formal', test_buy_cas
         t2 = test_tier2_thresholds.get(gua) if test_tier2_thresholds else None
         pd_min = test_pool_days_mins.get(gua) if test_pool_days_mins else None
         pd_max = test_pool_days_maxs.get(gua) if test_pool_days_maxs else None
-        result[gua] = build_bagua_debug_matrix_for_dataset(gua, dataset_key=dataset_key, test_buy_case=bc, test_pool_threshold=pt, test_sell=sm, tier1_threshold=t1, tier2_threshold=t2, pool_days_min=pd_min, pool_days_max=pd_max)
+        pdp = test_pool_depths.get(gua) if test_pool_depths else None
+        result[gua] = build_bagua_debug_matrix_for_dataset(gua, dataset_key=dataset_key, test_buy_case=bc, test_pool_threshold=pt, test_sell=sm, tier1_threshold=t1, tier2_threshold=t2, pool_days_min=pd_min, pool_days_max=pd_max, pool_depth=pdp, start_date=start_date, end_date=end_date, data_version=data_version)
     return result
 
 
@@ -1232,18 +1217,6 @@ def load_market_bagua_visual(start_date=None, end_date=None):
 
 
 @st.cache_data(ttl=300)
-def load_macro_bagua_visual(start_date=None, end_date=None):
-    """加载大周期八卦可视化数据"""
-    numeric_cols = [
-        'market_open_proxy', 'market_high_proxy', 'market_low_proxy', 'market_close_proxy',
-        'market_trend_slow', 'market_trend_anchor_slow', 'market_speed_slow', 'macro_breadth_slow',
-        'limit_heat', 'limit_quality', 'seg_id', 'seg_day', 'changed',
-        'yao_1', 'yao_2', 'yao_3',
-    ]
-    return _load_regime_visual(load_macro_bagua, numeric_cols, start_date=start_date, end_date=end_date)
-
-
-@st.cache_data(ttl=300)
 def build_market_bagua_segments_summary(start_date=None, end_date=None):
     """汇总市场卦 segment 信息，供页面核对使用"""
     df = load_market_bagua_visual(start_date=start_date, end_date=end_date)
@@ -1284,46 +1257,6 @@ def build_market_bagua_gua_summary(start_date=None, end_date=None):
 
 
 @st.cache_data(ttl=300)
-def build_macro_bagua_segments_summary(start_date=None, end_date=None):
-    """汇总区间内大周期卦 segment 信息"""
-    df = load_macro_bagua_visual(start_date=start_date, end_date=end_date)
-    if len(df) == 0:
-        return pd.DataFrame()
-
-    grouped = df.groupby('seg_id', sort=True)
-    summary = grouped.agg(
-        开始日=('date', 'min'),
-        结束日=('date', 'max'),
-        卦码=('gua_code', 'last'),
-        卦名=('gua_name', 'last'),
-        持续天数=('seg_day', 'max'),
-        变卦标记数=('changed', 'sum'),
-        起始价=('market_close_proxy', 'first'),
-        结束价=('market_close_proxy', 'last'),
-        慢速均值=('market_speed_slow', 'mean'),
-        慢广度均值=('macro_breadth_slow', 'mean'),
-        热度均值=('limit_heat', 'mean'),
-        质量均值=('limit_quality', 'mean'),
-    ).reset_index()
-    summary['段内涨跌幅%'] = (summary['结束价'] / summary['起始价'] - 1.0) * 100.0
-    summary['开始日'] = pd.to_datetime(summary['开始日']).dt.strftime('%Y-%m-%d')
-    summary['结束日'] = pd.to_datetime(summary['结束日']).dt.strftime('%Y-%m-%d')
-    return summary.sort_values('seg_id', ascending=False).reset_index(drop=True)
-
-
-@st.cache_data(ttl=300)
-def build_macro_bagua_gua_summary(start_date=None, end_date=None):
-    """汇总区间内大周期卦分布"""
-    df = load_macro_bagua_visual(start_date=start_date, end_date=end_date)
-    if len(df) == 0:
-        return pd.DataFrame()
-
-    out = df.groupby(['gua_code', 'gua_name'], sort=True).size().reset_index(name='天数')
-    out['占比%'] = out['天数'] / len(df) * 100.0
-    return out.sort_values(['天数', 'gua_code'], ascending=[False, True]).reset_index(drop=True)
-
-
-@st.cache_data(ttl=300)
 def build_market_bagua_change_windows(window=10, start_date=None, end_date=None):
     """提取变卦事件窗口摘要"""
     df = load_market_bagua_visual(start_date=start_date, end_date=end_date)
@@ -1354,44 +1287,6 @@ def build_market_bagua_change_windows(window=10, start_date=None, end_date=None)
             '后看涨跌幅%': after_ret,
             '当日速度': row.get('market_speed_20', pd.NA),
             '当日广度': row.get('enhanced_breadth_momo', pd.NA),
-            '当日热度': row.get('limit_heat', pd.NA),
-            '当日质量': row.get('limit_quality', pd.NA),
-            'segment': row.get('seg_id', pd.NA),
-        })
-    return pd.DataFrame(rows)
-
-
-@st.cache_data(ttl=300)
-def build_macro_bagua_change_windows(window=10, start_date=None, end_date=None):
-    """提取大周期卦变卦事件窗口摘要"""
-    df = load_macro_bagua_visual(start_date=start_date, end_date=end_date)
-    if len(df) == 0:
-        return pd.DataFrame()
-
-    events = df[df['changed'] == 1].copy()
-    if len(events) == 0:
-        return pd.DataFrame()
-
-    rows = []
-    for idx, row in events.iterrows():
-        left = max(0, idx - window)
-        right = min(len(df) - 1, idx + window)
-        window_df = df.iloc[left:right + 1].copy()
-        prev_close = df.iloc[left]['market_close_proxy'] if left < len(df) else pd.NA
-        next_close = df.iloc[right]['market_close_proxy'] if right < len(df) else pd.NA
-        before_ret = (row['market_close_proxy'] / prev_close - 1.0) * 100.0 if pd.notna(prev_close) and prev_close else pd.NA
-        after_ret = (next_close / row['market_close_proxy'] - 1.0) * 100.0 if pd.notna(next_close) and row['market_close_proxy'] else pd.NA
-        rows.append({
-            '日期': row['date'].strftime('%Y-%m-%d'),
-            '前卦': row.get('prev_gua', ''),
-            '现卦': row.get('gua_code', ''),
-            '卦名': row.get('gua_name', ''),
-            '卦意': MACRO_GUA_MEANINGS.get(str(row.get('gua_code', '')).zfill(3), row.get('gua_name', '')),
-            '窗口长度': len(window_df),
-            '前看涨跌幅%': before_ret,
-            '后看涨跌幅%': after_ret,
-            '当日慢速': row.get('market_speed_slow', pd.NA),
-            '当日慢广度': row.get('macro_breadth_slow', pd.NA),
             '当日热度': row.get('limit_heat', pd.NA),
             '当日质量': row.get('limit_quality', pd.NA),
             'segment': row.get('seg_id', pd.NA),

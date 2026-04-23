@@ -107,14 +107,3 @@ def calc_retail_line(closes):
     raw[np.isnan(ma11)] = np.nan
     result = _tdx_ema(raw, 7) * 5
     return result
-
-
-# ═══════════════════════════ 分钟级趋势线 ═══════════════════════
-
-def calc_min_trend_line(closes, highs, lows):
-    """
-    分钟级趋势线 (0~100)，公式与日线相同
-    输入: numpy数组（建议拼接前一天数据做warmup）
-    输出: 同长度numpy数组
-    """
-    return calc_trend_line(closes, highs, lows)

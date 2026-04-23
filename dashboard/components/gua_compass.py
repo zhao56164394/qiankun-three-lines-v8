@@ -21,10 +21,6 @@
   主路径(6步): 乾→兑→震→坤→艮→巽→乾
   过渡态(2个): 离(101)=下跌过渡震荡, 坎(010)=上涨过渡震荡
 
-阴阳分类 (三爻多数决):
-  阳卦(2阳+): 乾(111) 兑(110) 离(101) 巽(011)
-  阴卦(2阴+): 坤(000) 艮(001) 坎(010) 震(100)
-
 三层卦 (同一公式, 不同频率):
   年卦(时针): 月线趋势线MA12位置 / MA12的6月变化 / 月线主力线MA12
   月卦(分针): 月线趋势线位置 / 趋势线3月变化 / 月线主力线
@@ -40,21 +36,21 @@ import json
 
 # === 八卦定义 ===
 BAGUA_COMPASS = {
-    '111': {'name': '乾', 'meaning': '如日中天', 'yy': '阳', 'nature': '天',
+    '111': {'name': '乾', 'meaning': '如日中天', 'nature': '天',
             'color': '#ef4444', 'detail': '高位+上升+主力强', 'role': '主路·牛顶'},
-    '110': {'name': '兑', 'meaning': '分歧初现', 'yy': '阳', 'nature': '泽',
+    '110': {'name': '兑', 'meaning': '分歧初现', 'nature': '泽',
             'color': '#a78bfa', 'detail': '高位+上升+主力弱', 'role': '主路·下跌起点'},
-    '101': {'name': '离', 'meaning': '主力护盘', 'yy': '阳', 'nature': '火',
+    '101': {'name': '离', 'meaning': '主力护盘', 'nature': '火',
             'color': '#fb923c', 'detail': '高位+下降+主力强', 'role': '过渡·下跌震荡'},
-    '100': {'name': '震', 'meaning': '雷霆坠落', 'yy': '阴', 'nature': '雷',
+    '100': {'name': '震', 'meaning': '雷霆坠落', 'nature': '雷',
             'color': '#ef4444', 'detail': '高位+下降+主力弱', 'role': '主路·崩塌'},
-    '011': {'name': '巽', 'meaning': '风起云涌', 'yy': '阳', 'nature': '风',
+    '011': {'name': '巽', 'meaning': '风起云涌', 'nature': '风',
             'color': '#f59e0b', 'detail': '低位+上升+主力强', 'role': '主路·启动'},
-    '010': {'name': '坎', 'meaning': '方向试探', 'yy': '阴', 'nature': '水',
+    '010': {'name': '坎', 'meaning': '方向试探', 'nature': '水',
             'color': '#4ade80', 'detail': '低位+上升+主力弱', 'role': '过渡·上涨震荡'},
-    '001': {'name': '艮', 'meaning': '底部蓄力', 'yy': '阴', 'nature': '山',
+    '001': {'name': '艮', 'meaning': '底部蓄力', 'nature': '山',
             'color': '#86efac', 'detail': '低位+下降+主力强', 'role': '主路·上涨起点'},
-    '000': {'name': '坤', 'meaning': '至暗时刻', 'yy': '阴', 'nature': '地',
+    '000': {'name': '坤', 'meaning': '至暗时刻', 'nature': '地',
             'color': '#22c55e', 'detail': '低位+下降+主力弱', 'role': '主路·熊底'},
 }
 
@@ -76,12 +72,7 @@ COMPASS_ANGLES = {
 }
 
 
-def _clean_gua_code(code):
-    """清洗卦编码: 处理 '111.0' / 111 / '111' 等格式"""
-    s = str(code).strip()
-    if '.' in s:
-        s = s.split('.')[0]
-    return s.zfill(3)
+from data_layer.gua_data import clean_gua as _clean_gua_code
 
 
 def _gua_angle(gua_code):
@@ -122,7 +113,7 @@ def render_unified_compass(dates_gua_list, initial_index=None):
     for code, info in BAGUA_COMPASS.items():
         bagua_js[code] = {
             'name': info['name'], 'color': info['color'],
-            'yy': info['yy'], 'meaning': info['meaning'],
+            'meaning': info['meaning'],
             'role': info['role'], 'nature': info['nature'],
         }
     bagua_json = json.dumps(bagua_js, ensure_ascii=False)
@@ -442,12 +433,12 @@ def render_unified_compass(dates_gua_list, initial_index=None):
             setLabel('lb-y', yi, d.yg, 'year'); setLabel('lb-m', mi, d.mg, 'month'); setLabel('lb-d', di, d.dg, 'day');
 
             // 综合判断
-            const yy = [yi?.yy, mi?.yy, di?.yy];
-            const yc = yy.filter(x => x === '阳').length;
+            const positions = [d.yg, d.mg, d.dg].map(g => g ? g[0] : '0');
+            const upCount = positions.filter(x => x === '1').length;
             let ov = '';
-            if (yc === 3) ov = '三阳开泰 — 全面看多';
-            else if (yc === 0) ov = '三阴蔽日 — 全面看空';
-            else if (yc === 2) ov = '偏强格局 — 整体向好';
+            if (upCount === 3) ov = '三层高位 — 全面看多';
+            else if (upCount === 0) ov = '三层低位 — 全面看空';
+            else if (upCount === 2) ov = '偏强格局 — 整体向好';
             else ov = '偏弱格局 — 整体承压';
             document.getElementById('bc-overall').textContent = ov;
 
@@ -553,38 +544,34 @@ def render_unified_compass(dates_gua_list, initial_index=None):
             }});
             h += '</table>';
 
-            // 阴阳分类 (三爻多数决)
-            h += '<div style="color:#ddd;font-size:14px;font-weight:bold;margin:10px 0 8px;border-bottom:1px solid #333;padding-bottom:6px;">阴阳分类 · 三爻多数决</div>';
-            h += '<div style="color:#aaa;font-size:12px;margin-bottom:10px;">';
-            h += '<span style="color:#ef4444;">阳卦</span> (2阳+): 乾(111) 兑(110) 离(101) 巽(011) &nbsp;';
-            h += '<span style="color:#22c55e;">阴卦</span> (2阴+): 坤(000) 艮(001) 坎(010) 震(100)</div>';
+
 
             // 6+2 模型
             h += '<div style="color:#ddd;font-size:14px;font-weight:bold;margin:10px 0 8px;border-bottom:1px solid #333;padding-bottom:6px;">6+2 市场周期模型</div>';
             h += '<div style="color:#aaa;font-size:12px;margin-bottom:10px;">';
             h += '主路径(6步): 乾→兑→震→坤→艮→巽→乾<br/>';
             h += '过渡态(2个): <span style="color:#fb923c;">离</span>(下跌震荡) + <span style="color:#4ade80;">坎</span>(上涨震荡)<br/>';
-            h += '牛市启动: 先主力进场(三爻阳) → 再方向转升(二爻阳) → 最后位置到高位(初爻阳)<br/>';
-            h += '熊市启动: 先主力撤退(三爻阴) → 再方向转降(二爻阴) → 最后位置到低位(初爻阴)</div>';
+            h += '牛市启动: 先主力进场(三爻=1) → 再方向转升(二爻=1) → 最后位置到高位(初爻=1)<br/>';
+            h += '熊市启动: 先主力撤退(三爻=0) → 再方向转降(二爻=0) → 最后位置到低位(初爻=0)</div>';
 
             // 八卦卡片
             h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;">';
             POS.forEach(p => {{
                 const info = B[p.code];
-                const yyC = info.yy === '阳' ? '#ef4444' : '#22c55e';
-                const y1 = p.code[0]==='1' ? '阳' : '阴';
-                const y2 = p.code[1]==='1' ? '阳' : '阴';
-                const y3 = p.code[2]==='1' ? '阳' : '阴';
+                
+                
+                
+                
                 const border = p.transition ? '1px dashed '+info.color : '1px solid #222';
                 h += '<div style="background:#111;border-radius:6px;padding:8px;border-left:3px solid '+info.color+';border:'+border+';">';
                 h += '<div style="display:flex;justify-content:space-between;align-items:center;">';
                 h += '<span style="color:'+info.color+';font-weight:bold;font-size:15px;">'+info.name+'</span>';
-                h += '<span style="color:'+yyC+';font-size:11px;background:'+yyC+'18;padding:1px 5px;border-radius:3px;">'+info.yy+'</span>';
+                
                 h += '</div>';
                 h += '<div style="color:#aaa;font-size:11px;margin-top:1px;">'+info.nature+' | '+p.code+'</div>';
                 h += '<div style="color:#ddd;font-size:12px;margin-top:3px;font-weight:bold;">'+info.meaning+'</div>';
                 h += '<div style="color:#666;font-size:11px;">'+info.role+'</div>';
-                h += '<div style="color:#555;font-size:10px;margin-top:2px;">初'+y1+' 二'+y2+' 三'+y3+'</div>';
+                
                 h += '</div>';
             }});
             h += '</div>';

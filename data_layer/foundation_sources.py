@@ -312,20 +312,6 @@ def load_index_daily(date: Optional[str] = None, file_path: Optional[str] = None
     return df.sort_values(['date', 'index_code']).reset_index(drop=True)
 
 
-def load_index_snapshot(date: Optional[str] = None) -> pd.DataFrame:
-    df = load_index_daily(date=date)
-    if df.empty:
-        return df
-    if 'index_code' not in df.columns:
-        return pd.DataFrame()
-    df = df[df['index_code'].isin(CORE_INDEX_CODES.keys())].copy()
-    if df.empty:
-        return pd.DataFrame()
-    pivot = df.pivot_table(index='date', columns='index_code', values='pb', aggfunc='last')
-    pivot = pivot.reset_index()
-    pivot = pivot.rename(columns=CORE_INDEX_CODES)
-    return pivot
-
 
 def load_index_closes_from_stock_metrics(date: Optional[str] = None) -> pd.DataFrame:
     path = csv_for_date(PATHS['index_daily_root'], date) if date else latest_csv_under(PATHS['index_daily_root'])

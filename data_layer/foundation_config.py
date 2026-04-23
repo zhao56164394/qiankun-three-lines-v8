@@ -168,14 +168,6 @@ def foundation_file(name: str) -> str:
     return os.path.join(FOUNDATION_DATA_DIR, name)
 
 
-def get_required_source_paths() -> List[str]:
-    return [
-        PATHS['stock_basic'],
-        PATHS['stock_daily_metrics_root'],
-        PATHS['chip_root'],
-        PATHS['index_daily_root'],
-    ]
-
 
 def path_exists_map() -> Dict[str, bool]:
     return {k: os.path.exists(v) for k, v in PATHS.items()}

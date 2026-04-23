@@ -480,7 +480,7 @@ def is_crazy_mode(zz1000_entry):
 
 
 # ============================================================
-# 512卦象分级
+# 512 卦象分级 (仅为 live/qmt_strategy.py 兼容保留；回测已不用)
 # ============================================================
 def to_yinyang(code):
     """三位卦码→阴/阳"""
@@ -501,32 +501,18 @@ def load_stock_events_df():
 
 
 def build_512_snapshot(stock_events_df, as_of_date):
-    """
-    构建截至as_of_date的512卦象超额收益快照
-
-    Args:
-        stock_events_df: 事件表DataFrame
-        as_of_date: 截止日期字符串 'YYYY-MM-DD'
-
-    Returns:
-        dict: {combo_key: mean_excess_ret}
-    """
+    """构建截至 as_of_date 的 512 卦象超额收益快照"""
     if stock_events_df is None:
         return {}
-
-    # 只取avail_date <= as_of_date的事件
     valid = stock_events_df[stock_events_df['avail_date'] <= as_of_date]
     if len(valid) == 0:
         return {}
-
     combos = (valid['year_gua'] + '_' + valid['month_gua'] + '_' + valid['day_gua']).values
     excess_rets = valid['excess_ret'].values
-
     combo_rets = {}
     for c, r in zip(combos, excess_rets):
         if not np.isnan(r):
             combo_rets.setdefault(c, []).append(r)
-
     snap = {}
     for c, rets in combo_rets.items():
         if len(rets) >= MIN_512_SAMPLES:
@@ -535,16 +521,7 @@ def build_512_snapshot(stock_events_df, as_of_date):
 
 
 def grade_signal(year_yy, combo_pred):
-    """
-    信号分级 (与backtest_capital.py完全一致)
-
-    Args:
-        year_yy: '阴' 或 '阳'
-        combo_pred: 512卦象超额收益预测值
-
-    Returns:
-        (grade, description): 如 ('A+', '年阴+512强超额(>3%)')
-    """
+    """信号分级: 年阴/年阳 × 512超额 → 等级"""
     if year_yy == '阳':
         if combo_pred is not None and not (isinstance(combo_pred, float) and np.isnan(combo_pred)):
             if combo_pred > 3:

@@ -28,10 +28,10 @@ import pandas as pd
 def prepare_stock_events():
     """生成个股段首事件表（超额收益版 + 中证象卦）"""
     print("=" * 80)
-    print("个股段首事件表生成（超额收益 + zz_gua）")
+    print("个股段首事件表生成（超额收益 + ren_gua）")
     print("=" * 80)
 
-    # 加载中证1000日线，构建日期→ret_30映射 + 日期→zz_gua映射
+    # 加载中证1000日线，构建日期→ret_30映射 + 日期→ren_gua映射
     zz_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            'data', 'zz1000_daily.csv')
     zz = pd.read_csv(zz_path, encoding='utf-8-sig', usecols=['date', 'close', 'gua'])
@@ -39,7 +39,7 @@ def prepare_stock_events():
     zz['zz_ret_30'] = (zz['close'].shift(-30) / zz['close'] - 1) * 100
     zz['gua'] = zz['gua'].astype(str).str.split('.').str[0].str.zfill(3)
     zz_ret_map = dict(zip(zz['date'], zz['zz_ret_30']))
-    zz_gua_map = dict(zip(zz['date'], zz['gua']))
+    ren_gua_map = dict(zip(zz['date'], zz['gua']))
     print(f"中证1000日线: {len(zz)}天, 有ret_30: {zz['zz_ret_30'].notna().sum()}天")
 
     stock_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -82,7 +82,7 @@ def prepare_stock_events():
                 'event_date': row['date'],
                 'avail_date': row['avail_date'],
                 'gua': row['gua'],
-                'zz_gua': zz_gua_map.get(row['date'], ''),
+                'ren_gua': ren_gua_map.get(row['date'], ''),
                 'excess_ret': round(row['excess_ret'], 4),
             })
 
@@ -114,9 +114,9 @@ def prepare_stock_events():
     print(f">=3次(可统计): {(combo_counts >= 3).sum()} 种卦象")
 
     # 交叉表统计
-    cross_counts = event_df.groupby(['zz_gua', 'gua']).size()
-    cross_mean = event_df.groupby(['zz_gua', 'gua'])['excess_ret'].mean()
-    print(f"\n交叉表(zz_gua x stk_gua): {len(cross_counts)} 个组合, >=3次: {(cross_counts >= 3).sum()}")
+    cross_counts = event_df.groupby(['ren_gua', 'gua']).size()
+    cross_mean = event_df.groupby(['ren_gua', 'gua'])['excess_ret'].mean()
+    print(f"\n交叉表(ren_gua x stk_gua): {len(cross_counts)} 个组合, >=3次: {(cross_counts >= 3).sum()}")
 
     # 超额收益分布
     combo_mean = event_df.groupby('gua')['excess_ret'].mean()

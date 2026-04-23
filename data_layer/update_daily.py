@@ -35,6 +35,10 @@ INDEX_ZIP = 'E:/BaiduSyncdisk/A股数据_zip/指数/指数_日_kline.zip'
 STOCK_ZIP = 'E:/BaiduSyncdisk/A股数据_zip/daily_qfq.zip'
 STOCK_LIST = 'E:/BaiduSyncdisk/A股数据_zip/股票列表.csv'
 
+# 每日增量CSV数据源（ZIP不够新时用这些补充）
+STOCK_DAILY_CSV_ROOT = 'E:/BaiduSyncdisk/A股数据_每日指标/增量数据/每日指标'
+INDEX_DAILY_CSV_ROOT = 'E:/BaiduSyncdisk/指数数据/增量数据/指数日线行情'
+
 
 def recalc_tail_indicators(df, col_close='close', col_high='high', col_low='low',
                             n_tail=5):
@@ -84,6 +88,127 @@ def _update_gua_column(df, closes, highs, lows, n_tail=5):
 
 
 # ============================================================
+# 每日CSV补充数据源
+# ============================================================
+def _find_daily_csv_dates(root, after_date):
+    """扫描每日增量CSV目录,返回 > after_date 的所有日期文件路径"""
+    results = []
+    after_int = int(after_date.replace('-', ''))
+    for month_dir in sorted(os.listdir(root)):
+        month_path = os.path.join(root, month_dir)
+        if not os.path.isdir(month_path):
+            continue
+        for fname in sorted(os.listdir(month_path)):
+            if not fname.endswith('.csv'):
+                continue
+            date_str = fname[:8]
+            if date_str.isdigit() and int(date_str) > after_int:
+                results.append(os.path.join(month_path, fname))
+    return results
+
+
+def _supplement_zz1000_from_csv(combined, last_date):
+    """从每日指数CSV补充中证1000数据"""
+    if not os.path.exists(INDEX_DAILY_CSV_ROOT):
+        return combined, 0
+
+    csv_files = _find_daily_csv_dates(INDEX_DAILY_CSV_ROOT, last_date)
+    if not csv_files:
+        return combined, 0
+
+    new_rows = []
+    for fpath in csv_files:
+        df = pd.read_csv(fpath, encoding='utf-8-sig')
+        zz = df[df.iloc[:, 0].astype(str) == '000852.SH']
+        if len(zz) == 0:
+            continue
+        row = zz.iloc[0]
+        date_val = str(int(row.iloc[1]))
+        date_fmt = f'{date_val[:4]}-{date_val[4:6]}-{date_val[6:8]}'
+        new_rows.append({
+            'date': date_fmt,
+            'close': float(row.iloc[3]),   # 收盘点位
+            'high': float(row.iloc[4]),    # 最高点位
+            'low': float(row.iloc[5]),     # 最低点位
+            'trend': np.nan,
+            'main_force': np.nan,
+            'gua': '',
+        })
+
+    if not new_rows:
+        return combined, 0
+
+    new_df = pd.DataFrame(new_rows)
+    for col in combined.columns:
+        if col not in new_df.columns:
+            new_df[col] = ''
+    combined = pd.concat([combined, new_df[combined.columns]], ignore_index=True)
+    return combined, len(new_rows)
+
+
+def _supplement_stock_from_csv(combined, code, last_date):
+    """从每日个股CSV补充单只股票数据 (使用预加载缓存)"""
+    if not hasattr(_supplement_stock_from_csv, '_cache'):
+        return combined, 0
+
+    cache = _supplement_stock_from_csv._cache
+    code_with_suffix = code + '.SZ' if code.startswith(('00', '30')) else code + '.SH'
+
+    new_rows = []
+    for date_fmt, df in cache.items():
+        match = df[df['code'] == code_with_suffix]
+        if len(match) == 0:
+            continue
+        row = match.iloc[0]
+        new_rows.append({
+            'date': date_fmt,
+            'open': float(row['open']),
+            'close': float(row['close']),
+            'high': float(row['high']),
+            'low': float(row['low']),
+            'trend': np.nan,
+            'retail': np.nan,
+            'main_force': np.nan,
+            'gua': '',
+        })
+
+    if not new_rows:
+        return combined, 0
+
+    new_df = pd.DataFrame(new_rows)
+    for col in combined.columns:
+        if col not in new_df.columns:
+            new_df[col] = ''
+    combined = pd.concat([combined, new_df[combined.columns]], ignore_index=True)
+    return combined, len(new_rows)
+
+
+def _preload_daily_csvs(last_date):
+    """预加载所有需要的每日CSV到内存 (避免每只股票都读一次文件)"""
+    if not os.path.exists(STOCK_DAILY_CSV_ROOT):
+        return
+
+    csv_files = _find_daily_csv_dates(STOCK_DAILY_CSV_ROOT, last_date)
+    if not csv_files:
+        return
+
+    cache = {}
+    for fpath in csv_files:
+        fname = os.path.basename(fpath)
+        date_str = fname[:8]
+        date_fmt = f'{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}'
+        df = pd.read_csv(fpath, encoding='utf-8-sig',
+                         usecols=['股票代码', '交易日期', '开盘价', '最高价', '最低价', '收盘价'],
+                         dtype={'股票代码': str})
+        df = df.rename(columns={'股票代码': 'code', '开盘价': 'open', '最高价': 'high',
+                                '最低价': 'low', '收盘价': 'close'})
+        cache[date_fmt] = df
+        print(f'  预加载CSV: {date_fmt} ({len(df)} 只)')
+
+    _supplement_stock_from_csv._cache = cache
+
+
+# ============================================================
 # 中证1000 增量更新
 # ============================================================
 def update_zz1000():
@@ -118,7 +243,20 @@ def update_zz1000():
     n_new = new_mask.sum()
 
     if n_new == 0:
-        print(f'  无新增数据 (最新源数据: {raw_dates[-1]})')
+        print(f'  ZIP无新增 (最新: {raw_dates[-1]})')
+        # ZIP没新数据,但每日CSV可能有
+        combined = existing.copy()
+        last = str(existing['date'].iloc[-1])
+        combined, n_csv = _supplement_zz1000_from_csv(combined, last)
+        if n_csv > 0:
+            print(f'  CSV补充: +{n_csv} 天')
+            combined = recalc_tail_indicators(
+                combined, col_close='close', col_high='high', col_low='low',
+                n_tail=n_csv + 5)
+            combined.to_csv(ZZ1000_PATH, index=False, encoding='utf-8-sig')
+            print(f'  已保存, 范围: {combined["date"].iloc[0]} ~ {combined["date"].iloc[-1]}')
+        else:
+            print(f'  无新增数据')
         return True
 
     print(f'  新增: {n_new} 天 ({raw_dates[new_mask][0]} ~ {raw_dates[new_mask][-1]})')
@@ -150,6 +288,15 @@ def update_zz1000():
     combined = recalc_tail_indicators(
         combined, col_close='close', col_high='high', col_low='low',
         n_tail=n_new + 5)
+
+    # 保存前检查是否还有更新的每日CSV数据
+    current_last = str(combined['date'].iloc[-1])
+    combined, n_csv = _supplement_zz1000_from_csv(combined, current_last)
+    if n_csv > 0:
+        print(f'  CSV补充: +{n_csv} 天')
+        combined = recalc_tail_indicators(
+            combined, col_close='close', col_high='high', col_low='low',
+            n_tail=n_csv + 5)
 
     # 保存
     combined.to_csv(ZZ1000_PATH, index=False, encoding='utf-8-sig')
@@ -194,7 +341,13 @@ def update_single_stock(code, zf=None):
             n_new = new_mask.sum()
 
             if n_new == 0:
-                return True  # 无新数据
+                # ZIP没新数据, 但每日CSV可能有
+                combined = existing.copy()
+                combined, n_csv = _supplement_stock_from_csv(combined, code, last_date)
+                if n_csv > 0:
+                    combined = recalc_tail_indicators(combined, n_tail=n_csv + 5)
+                    combined.to_csv(cache_path, index=False, encoding='utf-8-sig')
+                return True
 
             # 追加新行
             new_raw = raw[new_mask].reset_index(drop=True)
@@ -236,6 +389,12 @@ def update_single_stock(code, zf=None):
         combined = recalc_tail_indicators(
             combined, n_tail=n_new + 5)
 
+        # ZIP更新后再检查每日CSV是否有更新的数据
+        current_last = str(combined['date'].iloc[-1])
+        combined, n_csv = _supplement_stock_from_csv(combined, code, current_last)
+        if n_csv > 0:
+            combined = recalc_tail_indicators(combined, n_tail=n_csv + 5)
+
         # 保存
         combined.to_csv(cache_path, index=False, encoding='utf-8-sig')
         return True
@@ -259,30 +418,46 @@ def update_all_stocks():
 
     os.makedirs(STOCKS_DIR, exist_ok=True)
 
+    # 预加载每日CSV补充数据 (比ZIP更新的日期)
+    # 先找一个股票的最后日期作为基准
+    sample = os.path.join(STOCKS_DIR, '000001.csv')
+    if os.path.exists(sample):
+        sample_df = pd.read_csv(sample, usecols=['date'], dtype={'date': str})
+        base_date = str(sample_df['date'].iloc[-1])
+        print(f'  当前数据最后日期: {base_date}')
+        _preload_daily_csvs(base_date)
+    else:
+        print('  首次运行, 跳过CSV补充')
+
     success = 0
     skip = 0
     fail = 0
 
-    with zipfile.ZipFile(STOCK_ZIP) as zf:
-        all_files = zf.namelist()
-        all_codes = [f.replace('_daily_qfq.csv', '') for f in all_files
-                     if f.endswith('_daily_qfq.csv')
-                     and f.startswith(('00', '60', '30', '68'))]
-        all_codes = [c for c in all_codes if c in active_codes]
+    try:
+        with zipfile.ZipFile(STOCK_ZIP) as zf:
+            all_files = zf.namelist()
+            all_codes = [f.replace('_daily_qfq.csv', '') for f in all_files
+                         if f.endswith('_daily_qfq.csv')
+                         and f.startswith(('00', '60', '30', '68'))]
+            all_codes = [c for c in all_codes if c in active_codes]
 
-        print(f'  待更新: {len(all_codes)} 只')
+            print(f'  待更新: {len(all_codes)} 只')
 
-        for i, code in enumerate(all_codes):
-            if (i + 1) % 200 == 0:
-                print(f'  进度: {i+1}/{len(all_codes)} ({success}更新 {skip}跳过)')
+            for i, code in enumerate(all_codes):
+                if (i + 1) % 200 == 0:
+                    print(f'  进度: {i+1}/{len(all_codes)} ({success}更新 {skip}跳过)')
 
-            result = update_single_stock(code, zf)
-            if result:
-                success += 1
-            else:
-                fail += 1
+                result = update_single_stock(code, zf)
+                if result:
+                    success += 1
+                else:
+                    fail += 1
+    finally:
+        if hasattr(_supplement_stock_from_csv, '_cache'):
+            del _supplement_stock_from_csv._cache
 
     print(f'\n  完成! 更新{success}只, 失败{fail}只')
+
     return success, fail
 
 
@@ -296,6 +471,16 @@ def _clear_pkl_cache(pattern='*'):
 # ============================================================
 # 入口
 # ============================================================
+def _rebuild_baseline_snapshot_safe():
+    """重建 dashboard 裸跑快照；失败不影响数据更新本身。"""
+    try:
+        import rebuild_baseline_snapshot as rbs
+        print('\n  重建 dashboard 裸跑快照...')
+        rbs.main(verbose=True)
+    except Exception as e:
+        print(f'  !! 裸跑快照重建失败: {e}')
+
+
 def update_all():
     """更新所有数据"""
     print('=' * 60)
@@ -308,6 +493,7 @@ def update_all():
         # 数据更新后清除pkl缓存，下次回测自动重建
         print('\n  清除回测缓存...')
         _clear_pkl_cache()
+        _rebuild_baseline_snapshot_safe()
     else:
         print('\n  !! 中证1000更新失败, 跳过个股更新')
 

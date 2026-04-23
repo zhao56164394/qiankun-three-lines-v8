@@ -24,26 +24,14 @@ sys.stdout = io.TextIOWrapper(
     encoding='utf-8', line_buffering=True)
 
 from backtest_capital import (
-    load_zz1000, load_zz1000_full, load_stocks, load_stock_events,
-    build_daily_512_snapshot, build_512_rolling_pred, grade_signal,
-    to_yinyang, calc_sell_bear, calc_sell_bull, calc_sell_stall,
+    load_zz1000, load_zz1000_full, load_stocks,
+    calc_sell_bear, calc_sell_bull, calc_sell_stall,
     calc_sell_trailing, calc_sell_trend_break,
-    POOL_THRESHOLD, MIN_512_SAMPLES,
-    YEAR_START, YEAR_END, INIT_CAPITAL, DATA_DIR, INNER_SELL_METHOD,
+    YEAR_START, YEAR_END, INIT_CAPITAL, DATA_DIR,
     load_big_cycle_context, build_context_stats, summarize_signal_context,
 )
 from data_layer.foundation_data import load_stock_bagua_map, load_market_bagua, load_daily_bagua
-
-
-
-def _clean_gua(val):
-    """清理卦码：去小数点、补零到3位"""
-    s = str(val).strip()
-    if s in ('nan', 'None', ''):
-        return '???'
-    if '.' in s:
-        s = s.split('.')[0]
-    return s.zfill(3) if s else '???'
+from data_layer.gua_data import clean_gua as _clean_gua, GUA_DISPLAY_NAMES as GUA_NAMES
 
 
 def _load_stock_main_force():
@@ -62,14 +50,6 @@ def _load_stock_main_force():
         except Exception:
             continue
     return mf_map
-
-GUA_NAMES = {
-    '000': '坤(反转)', '001': '艮(蓄力)', '010': '坎(弱反弹)', '011': '巽(反转)',
-    '100': '震(崩盘)', '101': '离(护盘)', '110': '兑(滞涨)', '111': '乾(牛顶)',
-}
-
-# 需要用实际策略收益做等级判断的卦（旧30日超额无区分力）
-ACTUAL_GRADE_GUAS = {'010'}  # 坎卦
 
 
 def build_gua_context_stats(trades):
@@ -91,62 +71,6 @@ def build_gua_context_stats(trades):
         }
     return out
 
-
-def build_actual_rolling_pred(sig_df, target_guas, min_hist=3):
-    """为指定卦的信号用实际策略收益构建滚动预测，覆盖旧combo_pred
-
-    对每个目标卦的信号，按时间排序，统计同个股卦(combo)在之前信号中的平均实际收益。
-    严格按signal_date排序，只用过去数据 → 无未来函数。
-
-    非目标卦的信号保持原grade不变。
-    """
-    # 只处理目标卦的信号
-    mask = sig_df['tian_gua'].isin(target_guas)
-    target_sig = sig_df[mask].sort_values('signal_date').reset_index(drop=True)
-
-    if len(target_sig) == 0:
-        return sig_df
-
-    combo_history = {}
-    preds = []
-
-    for _, row in target_sig.iterrows():
-        combo = row['combo']
-        hist = combo_history.get(combo, [])
-        if len(hist) >= min_hist:
-            preds.append(np.mean(hist))
-        else:
-            preds.append(np.nan)
-        combo_history.setdefault(combo, []).append(row['actual_ret'])
-
-    target_sig['combo_pred_actual'] = preds
-
-    # 用实际策略收益重新分级
-    new_grades = []
-    for _, row in target_sig.iterrows():
-        pred = row['combo_pred_actual']
-        if pd.isna(pred):
-            new_grades.append('B')  # 无历史
-        elif pred > 15:
-            new_grades.append('A+')
-        elif pred > 8:
-            new_grades.append('A')
-        elif pred > 3:
-            new_grades.append('B+')
-        elif pred > 0:
-            new_grades.append('B')
-        elif pred > -5:
-            new_grades.append('B-')
-        else:
-            new_grades.append('D')
-    target_sig['grade'] = new_grades
-
-    # 写回原DataFrame
-    sig_df = sig_df.copy()
-    for col in ['grade']:
-        sig_df.loc[mask, col] = target_sig[col].values
-
-    return sig_df
 
 # ============================================================
 # 八卦策略配置
@@ -177,66 +101,78 @@ def build_actual_rolling_pred(sig_df, target_guas, min_hist=3):
 UNIFIED_POOL_THRESHOLD = -250  # 统一入池阈值(fallback)
 
 GUA_STRATEGY = {
-    '000': {'grades': set(),  # 坤卦不走等级体系，用独立买入逻辑
-            'trend_max': None, 'retail_max': None, 'sell': 'kun_bear', 'active': True,
-            'pool_threshold': -250, 'pool_days_min': None, 'pool_days_max': None,
-            'kun_buy': True,             # 标记: 使用坤卦独立买入逻辑
-            'kun_exclude_ren_gua': {'000', '110'},  # 正式固定: 排人卦坤/兑
-            'kun_allow_di_gua': {'110'},              # 正式固定: 地卦仅保留兑(110)
-            'kun_buy_mode': 'double_rise',             # 正式固定: 双升(t>11)
-            'kun_cross_threshold': 20,                 # 上穿阈值(仅cross模式生效)
+    '000': {'sell': 'kun_bear', 'active': True,
+            'pool_threshold': -250,
+            # tiers 生效时, 覆盖 pool_depth / pool_days_min/max 的单独设置
+            'pool_depth': None,
+            'pool_days_min': None, 'pool_days_max': None,
+            'pool_depth_tiers': [
+                # 深池: 任意池天 (跌透了, 反弹概率高)
+                {'depth_max': -500, 'days_min': None, 'days_max': None},
+                # 中池: 仅接受熬够 11-20 天的长期困兽
+                {'depth_max': -350, 'days_min': 11,   'days_max': 20},
+                # 浅池: 仅接受当天或隔日入池 (刚跌到位立刻反)
+                {'depth_max': -250, 'days_min': 0,    'days_max': 1},
+            ],
+            'kun_buy': True,
+            'kun_exclude_ren_gua': {'000', '110'},
+            'kun_allow_di_gua': {'110'},
+            'kun_buy_mode': 'double_rise',
+            'kun_cross_threshold': 20,
             },
-    '001': {'grades': {'A+', 'A', 'B+', 'B', 'B-', 'C', 'D', 'F'},  # 艮卦=蓄力待发
-            'trend_max': None,   'retail_max': None,  'sell': 'bear',   'active': True,
-            'pool_threshold': -250, 'pool_days_min': None, 'pool_days_max': None,
-            'gen_buy': True,                              # 标记: 使用艮卦独立买入逻辑
-            'gen_allow_di_gua': {'000', '010'},         # 裸跑结论: 地卦仅保留坤/坎
-            'gen_buy_mode': 'double_rise',               # 买点模式: double_rise / cross
-            'gen_cross_threshold': 20,                   # 上穿阈值(仅cross模式生效)
+    '001': {'sell': 'bear', 'active': True,
+            'pool_threshold': -250, 'pool_depth': None,
+            'pool_days_min': None, 'pool_days_max': None,
+            'gen_buy': True,
+            'gen_allow_di_gua': {'000', '010'},
+            'gen_buy_mode': 'double_rise',
+            'gen_cross_threshold': 20,
             },
-    '010': {'grades': {'A+', 'A', 'B+', 'B', 'B-'},             'trend_max': None,  'retail_max': None, 'sell': 'bear',   'active': True,
-            'pool_threshold': -250, 'pool_days_min': None, 'pool_days_max': None,
-            },   # 坎: 新等级(实际策略收益)排D + 无趋势回升过滤 + 趋势跌破70卖
-    '011': {'grades': {'A+', 'A', 'B+', 'B', 'B-', 'C', 'D', 'F'}, 'trend_max': None, 'retail_max': None, 'sell': 'bear', 'active': True,
-            'pool_threshold': -250, 'pool_days_min': None, 'pool_days_max': None,
-            'xun_buy': 'double_rise',               # 正式固定: 双升 t>11
+    '010': {'sell': 'bear', 'active': True,
+            'pool_threshold': -250, 'pool_depth': None,
+            'pool_days_min': None, 'pool_days_max': None,
+            },
+    '011': {'sell': 'bear', 'active': True,
+            'pool_threshold': -250, 'pool_depth': None,
+            'pool_days_min': None, 'pool_days_max': None,
+            'xun_buy': 'double_rise',
             'xun_buy_param': 11,
-            'xun_allow_di_gua': {'010'},           # 正式固定: 地卦仅保留坎(010)
-            },  # 巽: 初始入池-300+双升t>11+个股仅坎+bear
-    '100': {'grades': set(),  # 震卦=崩盘加速，新专项验证后正式启用独立深池长持方案
-            'trend_max': None, 'retail_max': None, 'sell': 'bull', 'active': True,
-            'pool_threshold': -300, 'pool_days_min': 1, 'pool_days_max': 7,
-            'zhen_buy': True,                          # 正式启用: 走震卦独立分支
-            'zhen_buy_mode': 'double_rise',           # 正式固定: 双升(t>11)
-            'zhen_cross_threshold': 20,               # 上穿阈值(仅cross模式生效)
-            'zhen_exclude_ren_gua': {'001', '011'},  # 正式固定: 排人卦艮/巽
-            'zhen_allow_di_gua': None,               # 正式固定: 不限地卦
+            'xun_allow_di_gua': {'010'},
             },
-    '101': {'grades': {'A+', 'A', 'B+', 'B', 'B-', 'D'},     # 离卦=主力护盘
-            'trend_max': None,   'retail_max': None,  'sell': 'bear',   'active': True,
-            'pool_threshold': -250, 'pool_days_min': None, 'pool_days_max': None,
-            'li_buy': True,                            # 正式启用离卦独立买入逻辑
-            'li_buy_mode': 'double_rise',             # 买点模式: double_rise / cross
-            'li_cross_threshold': 20,                 # 上穿阈值(仅cross模式生效)
-            'li_exclude_ren_gua': {'001'},         # 正式固定: 排人卦艮(001)
-            'li_allow_di_gua': {'000'},              # 正式固定: 地卦仅保留坤(000)
+    '100': {'sell': 'bull', 'active': True,
+            'pool_threshold': -250, 'pool_depth': None,
+            'pool_days_min': 1, 'pool_days_max': 7,
+            'zhen_buy': True,
+            'zhen_buy_mode': 'double_rise',
+            'zhen_cross_threshold': 20,
+            'zhen_exclude_ren_gua': {'001', '011'},
+            'zhen_allow_di_gua': None,
             },
-    '110': {'grades': set(),  # 兑卦偏高位兑现，不走等级体系，暂保留旧版独立快出逻辑
-            'trend_max': None, 'retail_max': None, 'sell': 'dui_bear', 'active': True,
-            'pool_threshold': -250, 'pool_days_min': None, 'pool_days_max': None,
-            'dui_buy': True,             # 标记: 使用兑卦独立买入逻辑
-            'dui_buy_mode': 'cross',               # 买点模式: double_rise / cross
-            'dui_cross_threshold': 20,                  # 上穿买点阈值(仅cross模式生效)
-            'dui_allow_di_gua': {'000', '010', '110'},  # 暂保留当前正式版：地卦仅坤/坎/兑
-            'dui_exclude_ren_gua': {'110', '100'},    # 暂保留当前正式版：排人卦兑/震
+    '101': {'sell': 'bear', 'active': True,
+            'pool_threshold': -250, 'pool_depth': None,
+            'pool_days_min': None, 'pool_days_max': None,
+            'li_buy': True,
+            'li_buy_mode': 'double_rise',
+            'li_cross_threshold': 20,
+            'li_exclude_ren_gua': {'001'},
+            'li_allow_di_gua': {'000'},
             },
-    '111': {'grades': set(),  # 乾卦不走等级体系，用独立买入逻辑
-            'trend_max': None, 'retail_max': None, 'sell': 'qian_bull', 'active': True,
-            'pool_threshold': -250, 'pool_days_min': None, 'pool_days_max': None,
-            'qian_buy': True,            # 标记: 使用上穿独立买入逻辑
-            'qian_cross_threshold': 60,                           # 上穿阈值
-            'qian_exclude_ren_gua': set(),                    # 排除人卦(默认关闭)
-            'qian_exclude_di_gua': {'101', '111'},               # 排除地卦(离乾)
+    '110': {'sell': 'dui_bear', 'active': True,
+            'pool_threshold': -250, 'pool_depth': None,
+            'pool_days_min': None, 'pool_days_max': None,
+            'dui_buy': True,
+            'dui_buy_mode': 'cross',
+            'dui_cross_threshold': 20,
+            'dui_allow_di_gua': {'000', '010', '110'},
+            'dui_exclude_ren_gua': {'110', '100'},
+            },
+    '111': {'sell': 'qian_bull', 'active': True,
+            'pool_threshold': -250, 'pool_depth': None,
+            'pool_days_min': None, 'pool_days_max': None,
+            'qian_buy': True,
+            'qian_cross_threshold': 60,
+            'qian_exclude_ren_gua': set(),
+            'qian_exclude_di_gua': {'101', '111'},
             },
 }
 
@@ -258,6 +194,43 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
     def _calc_pool_days(idx, start_idx):
         return idx - start_idx if start_idx is not None else None
 
+    def _pool_depth_tier_ok(strat, pool_retail_min, pool_days):
+        """按池深分档的池深+池天联合验证。
+        tiers = [{'depth_max': -500, 'days_min': None, 'days_max': None}, ...]
+          按从深到浅顺序: 第一个 pool_retail_min <= depth_max 的档位生效；
+          生效档位再验 days_min/days_max。
+          设 depth_max=None 表示此档位无深度下限 (兜底)。
+        返回 (ok: bool, reject_reason: str|None)
+          reason 仅 ok=False 时有值: 'pool_depth' 或 'pool_days'
+        若 strat 无 tiers, 回退旧逻辑 (pool_depth + pool_days_min/max 独立)。
+        """
+        tiers = strat.get('pool_depth_tiers')
+        if not tiers:
+            # 旧逻辑兼容
+            pd_t = strat.get('pool_depth')
+            if pd_t is not None and pool_retail_min > pd_t:
+                return False, 'pool_depth'
+            pd_min = strat.get('pool_days_min')
+            pd_max = strat.get('pool_days_max')
+            if pool_days is not None:
+                if pd_min is not None and pool_days < pd_min:
+                    return False, 'pool_days'
+                if pd_max is not None and pool_days > pd_max:
+                    return False, 'pool_days'
+            return True, None
+        for tier in tiers:
+            depth_max = tier.get('depth_max')
+            if depth_max is None or pool_retail_min <= depth_max:
+                days_min = tier.get('days_min')
+                days_max = tier.get('days_max')
+                if pool_days is not None:
+                    if days_min is not None and pool_days < days_min:
+                        return False, 'pool_days'
+                    if days_max is not None and pool_days > days_max:
+                        return False, 'pool_days'
+                return True, None
+        return False, 'pool_depth'  # 没匹配任何档位 → 池太浅
+
     sell_fns = {
         'bear': lambda sd, i: calc_sell_bear(sd, i),
         'bull': lambda sd, i: calc_sell_bull(sd, i),
@@ -275,8 +248,8 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
     kun_strat = GUA_STRATEGY['000']
 
     all_signals = []
-    filter_stats = {'gua_inactive': 0, 'trend_at_buy': 0, 'retail_recovery': 0,
-                     'zz_trend': 0, 'di_gua': 0, 'stk_mf': 0,
+    filter_stats = {'gua_inactive': 0, 'zz_trend': 0, 'di_gua': 0, 'stk_mf': 0,
+                     'pool_depth': 0,
                      'qian_ren_gua': 0, 'qian_d': 0,
                      'dui_gua': 0, 'dui_trend': 0, 'dui_ren_gua': 0,
                      'gen_gua': 0, 'gen_ren_gua': 0,
@@ -303,10 +276,10 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
         for i in range(1, len(df)):
             dt_str = str(dates[i])
             stock_ctx = stock_bagua_map.get((dt_str, str(code).zfill(6)), {}) if stock_bagua_map else {}
-            di_gua = _clean_gua(stock_ctx.get('stock_gua', ''))
+            di_gua = _clean_gua(stock_ctx.get('di_gua', ''))
             if di_gua == '???':
                 continue
-            di_gua_name = stock_ctx.get('stock_gua_name', '')
+            di_gua_name = stock_ctx.get('di_gua_name', '')
             tian_info = tian_gua_map.get(dt_str, ('???', ''))
             tian_gua = tian_info[0] if isinstance(tian_info, tuple) else tian_info
             tian_gua_name = tian_info[1] if isinstance(tian_info, tuple) else ''
@@ -317,13 +290,11 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
             macro_gua = context.get('macro_gua', '')
             macro_gua_name = context.get('macro_gua_name', '')
 
-            current_pool_threshold = GUA_STRATEGY.get(tian_gua, {}).get('pool_threshold', UNIFIED_POOL_THRESHOLD)
-
             # ============================================================
-            # 共享池: 按卦独立初始入池阈值
+            # 共享池: 入池 → 各卦分支的 pool_depth 做二次验证
             # ============================================================
             if not pooled:
-                if not np.isnan(retail[i]) and retail[i] < current_pool_threshold:
+                if not np.isnan(retail[i]) and retail[i] < UNIFIED_POOL_THRESHOLD:
                     pooled = True; pool_retail = retail[i]
                     pool_start_idx = i
                 if pooled and not np.isnan(retail[i]):
@@ -375,7 +346,7 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                                         'combo': di_gua,
                                         'di_gua': di_gua,
                                         'di_gua_name': di_gua_name,
-                                        'gua_yy': to_yinyang(di_gua),
+                    
                                         'tian_gua': tian_gua,
                                         'sell_method': 'qian_bull',
                                         'macro_gua': macro_gua,
@@ -454,7 +425,7 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                                     'combo': di_gua,
                                     'di_gua': di_gua,
                                     'di_gua_name': di_gua_name,
-                                    'gua_yy': to_yinyang(di_gua),
+                
                                     'tian_gua': tian_gua,
                                     'sell_method': dui_sell_method,
                                     'macro_gua': macro_gua,
@@ -521,7 +492,7 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                                     'combo': di_gua,
                                     'di_gua': di_gua,
                                     'di_gua_name': di_gua_name,
-                                    'gua_yy': to_yinyang(di_gua),
+                
                                     'tian_gua': tian_gua,
                                     'sell_method': f'gen_{gen_sell_method}',
                                     'macro_gua': macro_gua,
@@ -558,8 +529,10 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                         filter_stats['kun_gua'] += 1
                         pooled = False; pool_retail = 0; pool_start_idx = None
                         continue
-                    if not _pool_days_ok(kun_strat, i, pool_start_idx):
-                        filter_stats['pool_days'] += 1
+                    # 池深分档 (含池天) - 覆盖旧的 pool_depth + pool_days_min/max 独立检查
+                    _ok, _reason = _pool_depth_tier_ok(kun_strat, pool_retail, _calc_pool_days(i, pool_start_idx))
+                    if not _ok:
+                        filter_stats[_reason] += 1
                         pooled = False; pool_retail = 0; pool_start_idx = None
                         continue
                     next_idx = i + 1
@@ -591,7 +564,7 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                                     'combo': di_gua,
                                     'di_gua': di_gua,
                                     'di_gua_name': di_gua_name,
-                                    'gua_yy': to_yinyang(di_gua),
+                
                                     'tian_gua': tian_gua,
                                     'sell_method': f'kun_{kun_exec_method}',
                                     'macro_gua': macro_gua,
@@ -633,8 +606,10 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                     is_xun_trigger = (trend[i] > trend[i-1] and trend[i] > xun_buy_param)
 
                 if is_xun_trigger:
-                    if not _pool_days_ok(xun_strat, i, pool_start_idx):
-                        filter_stats['pool_days'] += 1
+                    pool_days = _calc_pool_days(i, pool_start_idx)
+                    ok, reason = _pool_depth_tier_ok(xun_strat, pool_retail, pool_days)
+                    if not ok:
+                        filter_stats[reason] += 1
                         pooled = False; pool_retail = 0; pool_start_idx = None
                         continue
                     next_idx = i + 1
@@ -666,7 +641,7 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                             'combo': di_gua,
                             'di_gua': di_gua,
                             'di_gua_name': di_gua_name,
-                            'gua_yy': to_yinyang(di_gua),
+        
                             'tian_gua': tian_gua,
                             'sell_method': 'xun_bear',
                             'macro_gua': macro_gua,
@@ -703,18 +678,12 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                         filter_stats['zhen_gua'] += 1
                         pooled = False; pool_retail = 0; pool_start_idx = None
                         continue
-                    zhen_pd_min = zhen_strat.get('pool_days_min')
-                    zhen_pd_max = zhen_strat.get('pool_days_max')
-                    if pool_start_idx is not None and (zhen_pd_min is not None or zhen_pd_max is not None):
-                        _pool_days = i - pool_start_idx
-                        if zhen_pd_min is not None and _pool_days < zhen_pd_min:
-                            filter_stats['pool_days'] += 1
-                            pooled = False; pool_retail = 0; pool_start_idx = None
-                            continue
-                        if zhen_pd_max is not None and _pool_days > zhen_pd_max:
-                            filter_stats['pool_days'] += 1
-                            pooled = False; pool_retail = 0; pool_start_idx = None
-                            continue
+                    pool_days = _calc_pool_days(i, pool_start_idx)
+                    ok, reason = _pool_depth_tier_ok(zhen_strat, pool_retail, pool_days)
+                    if not ok:
+                        filter_stats[reason] += 1
+                        pooled = False; pool_retail = 0; pool_start_idx = None
+                        continue
                     next_idx = i + 1
                     if next_idx < len(df):
                         buy_price = opens[next_idx]
@@ -740,7 +709,7 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                                     'combo': di_gua,
                                     'di_gua': di_gua,
                                     'di_gua_name': di_gua_name,
-                                    'gua_yy': to_yinyang(di_gua),
+                
                                     'tian_gua': tian_gua,
                                     'sell_method': f'zhen_{zhen_sell_method}',
                                     'macro_gua': macro_gua,
@@ -777,8 +746,10 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                         filter_stats['li_gua'] += 1
                         pooled = False; pool_retail = 0; pool_start_idx = None
                         continue
-                    if not _pool_days_ok(li_strat, i, pool_start_idx):
-                        filter_stats['pool_days'] += 1
+                    pool_days = _calc_pool_days(i, pool_start_idx)
+                    ok, reason = _pool_depth_tier_ok(li_strat, pool_retail, pool_days)
+                    if not ok:
+                        filter_stats[reason] += 1
                         pooled = False; pool_retail = 0; pool_start_idx = None
                         continue
                     next_idx = i + 1
@@ -806,7 +777,7 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                                     'combo': di_gua,
                                     'di_gua': di_gua,
                                     'di_gua_name': di_gua_name,
-                                    'gua_yy': to_yinyang(di_gua),
+                
                                     'tian_gua': tian_gua,
                                     'sell_method': f'li_{li_sell_method}',
                                     'macro_gua': macro_gua,
@@ -833,52 +804,10 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                     pooled = False; pool_retail = 0; pool_start_idx = None
                     continue
 
-                # 中证趋势线过滤
-                zz_trend_max = strat.get('zz_trend_max')
-                if zz_trend_max is not None:
-                    zz_info = zz1000.get(dt_str, {})
-                    zz_trend_val = zz_info.get('trend', 99)
-                    if zz_trend_val > zz_trend_max:
-                        filter_stats['zz_trend'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-
-                # 买入过滤
-                trend_at_buy = trend[i]
-                if strat['trend_max'] is not None and trend_at_buy > strat['trend_max']:
-                    filter_stats['trend_at_buy'] += 1
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                    continue
-
-                start = pool_start_idx if pool_start_idx else max(0, i - 60)
-                retail_slice = retail[start:i + 1]
-                valid_retail = retail_slice[~np.isnan(retail_slice)]
-                retail_min_val = float(np.min(valid_retail)) if len(valid_retail) > 0 else retail[i]
-                retail_recovery = retail[i] - retail_min_val
-                if strat['retail_max'] is not None and retail_recovery > strat['retail_max']:
-                    filter_stats['retail_recovery'] += 1
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                    continue
-
-                # 个股象卦过滤(拒绝已反弹股等)
-                di_gua_reject = strat.get('di_gua_reject')
-                if di_gua_reject:
-                    if di_gua in di_gua_reject:
-                        filter_stats['di_gua'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-
-                # 个股主力线过滤(要求资金支撑)
-                stk_mf_min = strat.get('stk_mf_min')
-                if stk_mf_min is not None and stk_mf_map:
-                    mf_val = stk_mf_map.get(code, {}).get(dt_str, None)
-                    if mf_val is not None and mf_val < stk_mf_min:
-                        filter_stats['stk_mf'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-
-                if not _pool_days_ok(strat, i, pool_start_idx):
-                    filter_stats['pool_days'] += 1
+                # 池深分档验证 (pool_depth_tiers) + 池天 — 合并入一个 tier-aware 判断
+                _ok, _reason = _pool_depth_tier_ok(strat, pool_retail, _calc_pool_days(i, pool_start_idx))
+                if not _ok:
+                    filter_stats[_reason] += 1
                     pooled = False; pool_retail = 0; pool_start_idx = None
                     continue
 
@@ -919,7 +848,7 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                     'combo': di_gua,
                     'di_gua': di_gua,
                     'di_gua_name': di_gua_name,
-                    'gua_yy': to_yinyang(di_gua),
+
                     'tian_gua': tian_gua,
                     'sell_method': strat['sell'],
                     'macro_gua': macro_gua,
@@ -933,8 +862,7 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
 
     print(f"  过滤统计: 空仓卦={filter_stats['gua_inactive']}, "
           f"中证趋势={filter_stats['zz_trend']}, "
-          f"趋势过高={filter_stats['trend_at_buy']}, "
-          f"回升过大={filter_stats['retail_recovery']}, "
+          f"池底深度={filter_stats['pool_depth']}, "
           f"象卦拒绝={filter_stats['di_gua']}, "
           f"主力线={filter_stats['stk_mf']}")
     print(f"  坤卦过滤: 人卦黑名单={filter_stats['kun_ren_gua']}, 象卦白名单外={filter_stats['kun_gua']}")
@@ -961,10 +889,6 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
         for k, v in tian_gua_map_ext.items():
             tian_gua_map[k] = v[0] if isinstance(v, tuple) else v
     else:
-        def _clean_gua(val):
-            s = str(val).strip()
-            if '.' in s: s = s.split('.')[0]
-            return s.zfill(3) if s else '???'
         tian_gua_map = {}
         for _, row in zz_df.iterrows():
             tian_gua_map[row['date']] = _clean_gua(row['gua'])
@@ -993,7 +917,7 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
                     'profit': profit, 'buy_price': pos['buy_price'],
                     'sell_price': pos['sell_price'],
                     'ret_pct': (pos['sell_price'] / pos['buy_price'] - 1) * 100,
-                    'hold_days': pos['hold_days'], 'grade': pos.get('grade', '-'),
+                    'hold_days': pos['hold_days'],
                     'gua': pos.get('gua', '???'),
                     'di_gua': pos.get('di_gua', pos.get('combo', '???')),
                     'di_gua_name': pos.get('di_gua_name', ''),
@@ -1023,23 +947,15 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
         # 3. 过滤和买入
         candidates = sig_by_date.get(dt, [])
         if candidates:
-            allowed_grades = strat['grades']
-            # ���������ź�����ɨ��׶����ȫ�����ˣ����ߵȼ�/skip����
+            # 信号已在 scan_signals 阶段按卦策略完整过滤，这里仅排除 rank_order=1 与 skip
             filtered = []
             for c in candidates:
-                sell_method = c.get('sell_method', '')
                 rank_order = int(0 if pd.isna(c.get('rank_order')) else c.get('rank_order', 0))
                 if rank_order > 0 and rank_order <= 1:
                     continue
                 if c.get('is_skip', False):
                     continue
-                if (sell_method.startswith('qian_') or sell_method.startswith('dui_')
-                        or sell_method.startswith('kun_') or sell_method.startswith('gen_')
-                        or sell_method.startswith('xun_') or sell_method.startswith('zhen_')
-                        or sell_method.startswith('li_')):
-                    filtered.append(c)
-                elif c['grade'] in allowed_grades:
-                    filtered.append(c)
+                filtered.append(c)
             filtered.sort(key=lambda x: (-int(0 if pd.isna(x.get('rank_order')) else x.get('rank_order', 0)), x['pool_retail']))
             slots = max_pos - len(positions)
             can_buy = min(slots, daily_limit, len(filtered))
@@ -1057,7 +973,7 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
                         'code': c['code'], 'buy_date': c['buy_date'],
                         'sell_date': c['sell_date'], 'buy_price': c['buy_price'],
                         'sell_price': c['sell_price'], 'cost': cost,
-                        'hold_days': c['hold_days'], 'grade': c.get('grade', '-'),
+                        'hold_days': c['hold_days'],
                         'gua': tian_gua,
                         'combo': c.get('combo', '???'),
                         'di_gua': c.get('di_gua', c.get('combo', '???')),
@@ -1088,7 +1004,7 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
             'profit': profit, 'buy_price': pos['buy_price'],
             'sell_price': pos['sell_price'],
             'ret_pct': (pos['sell_price'] / pos['buy_price'] - 1) * 100,
-            'hold_days': pos['hold_days'], 'grade': pos.get('grade', '-'),
+            'hold_days': pos['hold_days'],
             'gua': pos.get('gua', '???'),
             'sell_method': pos.get('sell_method', '?'),
             'macro_gua': pos.get('macro_gua', ''),
@@ -1155,58 +1071,33 @@ def run(start_date=None, end_date=None, init_capital=None):
 
     # 输出策略配置
     print("\n  八卦策略配置:")
-    print(f"  {'卦':<15} {'状态':<6} {'卖法':<10} {'等级':<25} {'趋势≤':>5} {'回升≤':>5} {'中证≤':>5} {'附加过滤'}")
+    print(f"  {'卦':<15} {'状态':<6} {'卖法':<12} {'入池≤':>6} {'池底≤':>6} {'附加'}")
     print("  " + "-" * 100)
+    sell_labels = {'bear': 'bear(保守)', 'bull': 'bull(耐心)',
+                   'stall': 'stall(停滞)', 'trail': 'trail(止损)',
+                   'hybrid': 'hybrid(联合)', 'qian_bull': 'qian_bull(纯牛)',
+                   'kun_bear': 'kun_bear(反转)', 'dui_bear': 'dui_bear(快出)',
+                   'trend_break70': 'trend70(跌破)'}
     for gua in ['000', '001', '010', '011', '100', '101', '110', '111']:
         s = GUA_STRATEGY[gua]
         status = '交易' if s['active'] else '空仓'
-        sell_labels = {'bear': 'bear(保守)', 'bull': 'bull(耐心)',
-                       'stall': 'stall(停滞)', 'trail': 'trail(止损)',
-                       'hybrid': 'hybrid(联合)', 'qian_bull': 'qian_bull(纯牛)',
-                       'kun_bear': 'kun_bear(反转)', 'dui_bear': 'dui_bear(快出)',
-                       'trend_break70': 'trend70(跌破)'}
-        grades_str = ','.join(sorted(s['grades'])) if s['grades'] else '-'
-        t_str = str(s['trend_max']) if s['trend_max'] else 'X'
-        r_str = str(s['retail_max']) if s['retail_max'] else 'X'
-        zz_str = str(s.get('zz_trend_max', '')) if s.get('zz_trend_max') else 'X'
+        pool_thr = s.get('pool_threshold', UNIFIED_POOL_THRESHOLD)
+        pool_dep = s.get('pool_depth')
+        dep_str = str(pool_dep) if pool_dep is not None else 'X'
         extra = []
-        if gua == '000' and (s.get('kun_exclude_ren_gua')
-                             or s.get('kun_buy_mode', 'double_rise') != 'double_rise'
-                             or s.get('kun_allow_di_gua') not in (None, {'110'})):
-            market_block = s.get('kun_exclude_ren_gua', set())
-            market_desc = '/'.join(GUA_NAMES.get(g, g).split('(')[0] for g in sorted(market_block)) if market_block else '无'
+        if gua == '000' and s.get('kun_buy'):
             stock_allow = s.get('kun_allow_di_gua')
             stock_desc = '/'.join(GUA_NAMES.get(g, g).split('(')[0] for g in sorted(stock_allow)) if stock_allow else '不限'
-            buy_mode = s.get('kun_buy_mode', 'double_rise')
-            if buy_mode == 'cross':
-                buy_desc = f"cross@{s.get('kun_cross_threshold', 20)}"
-            else:
-                buy_desc = '双升(t>11)'
-            pool_desc = f"初始入池≤{s.get('pool_threshold', UNIFIED_POOL_THRESHOLD)}"
-            sell_desc = s.get('sell', 'kun_bear').removeprefix('kun_')
-            stock_prefix = '个股仅' if stock_allow else '个股'
-            extra.append(f"坤独立:排市场{market_desc} {stock_prefix}{stock_desc} {pool_desc} {buy_desc} {sell_desc}")
-            grades_str = '-'
-            t_str = 'X'
-            r_str = 'X'
+            extra.append(f"坤独立:个股仅{stock_desc} 双升(t>11)")
         if gua == '100' and s.get('zhen_buy'):
-            extra.append(f"震独立:排市场艮/巽 初始入池≤{s.get('pool_threshold', UNIFIED_POOL_THRESHOLD)} 双升(t>11) bull")
-            grades_str = '-'
-            t_str = 'X'
-            r_str = 'X'
+            extra.append("震独立:排人卦艮/巽 双升(t>11) bull")
         if gua == '101' and s.get('li_buy'):
-            extra.append(f"离独立:排市场艮 个股仅坤 初始入池≤{s.get('pool_threshold', UNIFIED_POOL_THRESHOLD)} 双升(t>11)")
-            grades_str = '-'
-            t_str = 'X'
-            r_str = 'X'
-        if s.get('stk_year_gua_reject'):
-            rej = ','.join(GUA_NAMES.get(g, g) for g in s['stk_year_gua_reject'])
-            extra.append(f"拒年卦:{rej}")
-        if s.get('stk_mf_min') is not None:
-            extra.append(f"主力≥{s['stk_mf_min']}")
+            extra.append("离独立:排人卦艮 个股仅坤 双升(t>11)")
+        if gua == '011' and s.get('xun_allow_di_gua'):
+            extra.append("巽独立:个股仅坎 双升(t>11)")
         extra_str = ' '.join(extra) if extra else ''
-        print(f"  {gua} {GUA_NAMES[gua]:<10} {status:<6} {sell_labels[s['sell']]:<10} "
-              f"{grades_str:<25} {t_str:>5} {r_str:>5} {zz_str:>5} {extra_str}")
+        print(f"  {gua} {GUA_NAMES[gua]:<10} {status:<6} {sell_labels[s['sell']]:<12} "
+              f"{pool_thr:>6} {dep_str:>6} {extra_str}")
 
     # 1. 加载数据
     print("\n[1] 加载数据...")
@@ -1240,16 +1131,6 @@ def run(start_date=None, end_date=None, init_capital=None):
     sig = scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map, big_cycle_context=big_cycle_context, stock_bagua_map=stock_bagua_map, daily_bagua_map=daily_bagua_map)
     sig = sig[(sig['signal_date'] >= year_start) &
               (sig['signal_date'] < year_end)].reset_index(drop=True)
-    sig = build_512_rolling_pred(sig, min_hist=MIN_512_SAMPLES)
-    sig['grade'] = [grade_signal(r['gua_yy'], r['combo_pred'])[0]
-                    for _, r in sig.iterrows()]
-
-    # 对指定卦用实际策略收益重新计算等级（旧30日超额无区分力）
-    if ACTUAL_GRADE_GUAS:
-        sig = build_actual_rolling_pred(sig, ACTUAL_GRADE_GUAS, min_hist=3)
-        for g in ACTUAL_GRADE_GUAS:
-            n_g = len(sig[sig['tian_gua'] == g])
-            print(f"  {g} {GUA_NAMES[g]}: 已切换为实际策略收益等级 ({n_g}笔)")
 
     print(f"  总信号: {len(sig)}, 非skip: {(~sig['is_skip']).sum()}")
     signal_context = summarize_signal_context(sig)
@@ -1402,7 +1283,7 @@ def run(start_date=None, end_date=None, init_capital=None):
         'trade_log': result['trade_log'],
         'signal_detail': sig.to_dict('records'),
         'yearly': yearly,
-        'gua_strategy': {g: {**s, 'grades': list(s['grades'])} for g, s in GUA_STRATEGY.items()},
+        'gua_strategy': {g: {k: (sorted(v) if isinstance(v, set) else v) for k, v in s.items()} for g, s in GUA_STRATEGY.items()},
         'context_stats': context_stats,
         'gua_context_stats': gua_context_stats,
         'signal_context': signal_context,

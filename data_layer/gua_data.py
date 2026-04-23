@@ -20,32 +20,53 @@ import os
 import numpy as np
 import pandas as pd
 
+from bagua_engine import BAGUA_TABLE
+
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 _ZZ1000_PATH = os.path.join(_DATA_DIR, 'zz1000_daily.csv')
 
 # ============================================================
-# 八卦基础定义 (避免循环依赖, 此处内联)
+# 统一卦名/顺序定义 (全项目唯一真相源)
 # ============================================================
-BAGUA_TABLE = {
-    '000': ('坤', '☷', '深熊探底', '阴'),
-    '001': ('艮', '☶', '底部吸筹', '阴'),
-    '010': ('坎', '☵', '反弹乏力', '阴'),
-    '011': ('巽', '☴', '底部爆发', '阳'),
-    '100': ('震', '☳', '高位出货', '阴'),
-    '101': ('离', '☲', '高位护盘', '阳'),
-    '110': ('兑', '☱', '牛末减仓', '阳'),
-    '111': ('乾', '☰', '疯牛主升', '阳'),
+GUA_ORDER = ['000', '001', '010', '011', '100', '101', '110', '111']
+GUA_NAMES = {k: v[0] for k, v in BAGUA_TABLE.items()}
+GUA_DISPLAY_NAMES = {k: f"{v[0]}({v[2]})" for k, v in BAGUA_TABLE.items()}
+
+_COMPAT_COLUMN_MAP = {
+    'zz_gua': 'tian_gua',
+    'market_gua': 'ren_gua',
+    'market_gua_name': 'ren_gua_name',
+    'stock_gua': 'di_gua',
+    'stock_gua_name': 'di_gua_name',
+    'market_name': 'ren_name',
+    'stock_name': 'di_name',
 }
 
-GUA_ORDER = ['000', '001', '010', '011', '100', '101', '110', '111']
+
+def compat_rename_columns(df):
+    """将旧字段名 (market_gua/stock_gua/zz_gua) 重命名为新名 (ren_gua/di_gua/tian_gua)。
+    仅在新列不存在而旧列存在时重命名，返回 df 本身（原地修改）。"""
+    if len(df) == 0:
+        return df
+    for old, new in _COMPAT_COLUMN_MAP.items():
+        if new not in df.columns and old in df.columns:
+            df.rename(columns={old: new}, inplace=True)
+    return df
 
 
 def _clean_code(code):
     """清洗卦编码: 处理 '101.0' / 101 / '101' 等各种格式"""
-    s = str(code).strip()
+    return clean_gua(code)
+
+
+def clean_gua(val):
+    """清洗卦编码，统一返回3位字符串。无效值返回 '???'"""
+    s = str(val).strip()
+    if s in ('nan', 'None', ''):
+        return '???'
     if '.' in s:
         s = s.split('.')[0]
-    return s.zfill(3)
+    return s.zfill(3) if s else '???'
 
 
 def gua_name(code):
@@ -61,16 +82,6 @@ def gua_label(code):
     if info:
         return f"{info[0]}{info[1]}({info[2]})"
     return '?'
-
-
-def gua_yinyang(code):
-    """'111' -> '阳'"""
-    code = _clean_code(code)
-    return BAGUA_TABLE.get(code, ('?', '?', '?', '?'))[3]
-
-
-def is_yang(code):
-    return gua_yinyang(code) == '阳'
 
 
 # ============================================================
@@ -113,7 +124,7 @@ def get_current_gua(date=None):
     Returns:
         dict: {
             'date': str, 'close': float,
-            'gua': str, 'gua_name': str, 'gua_yy': str,
+            'gua': str, 'gua_name': str,
         }
     """
     df = load_zz1000_gua()
@@ -131,7 +142,6 @@ def get_current_gua(date=None):
         'close': row['close'],
         'gua': g,
         'gua_name': gua_label(g),
-        'gua_yy': gua_yinyang(g),
     }
 
 
@@ -170,7 +180,7 @@ def get_market_state(date=None):
     Returns:
         dict: {
             'date': str, 'close': float,
-            'gua': str, 'gua_name': str, 'gua_yy': str,
+            'gua': str, 'gua_name': str,
             'state': str, 'feature': str, 'advice': str, 'transition': str,
         }
     """
@@ -183,7 +193,6 @@ def get_market_state(date=None):
         'close': curr['close'],
         'gua': gua_code,
         'gua_name': curr['gua_name'],
-        'gua_yy': curr['gua_yy'],
         'state': state['状态'],
         'feature': state['特征'],
         'advice': state['操作'],
@@ -198,7 +207,7 @@ def print_market_state(date=None):
     print(f"\n{'═' * 60}")
     print(f"  市场状态报告  {s['date']}  收盘{s['close']:.2f}")
     print(f"{'═' * 60}")
-    print(f"  象卦: {s['gua_name']} ({s['gua_yy']})")
+    print(f"  象卦: {s['gua_name']}")
     print(f"  状态: {s['state']} — {s['feature']}")
     print(f"  建议: {s['advice']}")
     print(f"  转机: {s['transition']}")
@@ -269,8 +278,8 @@ def get_buy_filter(date=None):
     基于中证象卦状态, 判断当天信号是否值得执行。
 
     逻辑:
-      - 爻1=阴(低位)的卦: 坤/艮/坎/巽 → 可以买入
-      - 爻1=阳(高位)的卦: 震/离/兑/乾 → 需要分卦策略
+      - 初爻=0(低位)的卦: 坤/艮/坎/巽 → 可以买入
+      - 初爻=1(高位)的卦: 震/离/兑/乾 → 需要分卦策略
 
     Args:
         date: 日期字符串, 为None则取最新
@@ -278,15 +287,14 @@ def get_buy_filter(date=None):
     Returns:
         dict: {
             'date': str, 'close': float,
-            'gua': str, 'gua_name': str, 'gua_yy': str,
+            'gua': str, 'gua_name': str,
             'can_buy': bool, 'reason': str,
         }
     """
     curr = get_current_gua(date)
     gua_code = _clean_code(curr['gua'])
-    yy = gua_yinyang(gua_code)
 
-    # 爻1=阴(低位)→ 可以买入
+    # 初爻=0(低位)→ 可以买入
     can_buy = (gua_code[0] == '0')
 
     if can_buy:
@@ -299,7 +307,6 @@ def get_buy_filter(date=None):
         'close': curr['close'],
         'gua': gua_code,
         'gua_name': curr['gua_name'],
-        'gua_yy': yy,
         'can_buy': can_buy,
         'reason': reason,
     }
@@ -312,7 +319,7 @@ def print_buy_filter(date=None):
     print(f"\n{'═' * 60}")
     print(f"  个股买入信号过滤  {f['date']}  收盘{f['close']:.2f}")
     print(f"{'═' * 60}")
-    print(f"  象卦: {f['gua_name']} ({f['gua_yy']})")
+    print(f"  象卦: {f['gua_name']} ({f['gua']})")
     print(f"{'─' * 60}")
     if f['can_buy']:
         print(f"  可以买入")
