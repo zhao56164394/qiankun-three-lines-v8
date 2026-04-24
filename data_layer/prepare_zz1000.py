@@ -56,9 +56,10 @@ def prepare_zz1000():
         'gua': gua_list,
     })
 
-    # warmup: 250日趋势线 + 20日速度 + 20日主力变化 + MA10 ≈ 300天
-    # 数据从2005-01-04开始，保守取2007起
-    result = result[result['date'] >= '2007-01-01'].reset_index(drop=True)
+    # 扩展到 2005-01-04 源数据起点, 保留全部历史
+    # (原 xiang_gua 250 日趋势需 warmup, 所以 gua 列在早期会为空字符串,
+    #  下游统计/回测本来就按日期过滤, 无副作用)
+    result = result[result['date'] >= '2005-01-04'].reset_index(drop=True)
 
     # 保存
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')

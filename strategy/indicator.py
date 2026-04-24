@@ -57,20 +57,22 @@ def _tdx_ema(arr, N):
 def calc_trend_line(closes, highs, lows, period=55):
     """
     趋势线 (0~100)
-    输入: numpy数组, 至少 period 个有效值
+    输入: numpy数组
     period: LLV/HHV窗口长度, 默认55
     输出: 同长度numpy数组
+
+    说明: LLV/HHV 用 min_periods=1, 和通达信 LLV(L,N) 一致
+    (bar 数不足 N 时用现有所有 bar, 不返回 NaN)
     """
     C = np.array(closes, dtype=float)
     H = np.array(highs, dtype=float)
     L = np.array(lows, dtype=float)
 
-    llv = pd.Series(L).rolling(period, min_periods=period).min().values
-    hhv = pd.Series(H).rolling(period, min_periods=period).max().values
+    llv = pd.Series(L).rolling(period, min_periods=1).min().values
+    hhv = pd.Series(H).rolling(period, min_periods=1).max().values
     denom = hhv - llv
     with np.errstate(divide='ignore', invalid='ignore'):
-        X = np.where(denom == 0, 100.0, (C - llv) / denom * 100)
-    X[np.isnan(llv)] = np.nan
+        X = np.where(denom > 0, (C - llv) / denom * 100, 50.0)
 
     sma1 = _tdx_sma(X, 5, 1)
     sma2 = _tdx_sma(sma1, 3, 1)
@@ -82,14 +84,12 @@ def calc_trend_line(closes, highs, lows, period=55):
 def calc_main_force_line(closes):
     """
     主力线: EMA((C-MA(C,7))/MA(C,7)*480, 2)*5
-    输入: numpy数组
-    输出: 同长度numpy数组
+    MA(C,7) 用 min_periods=1 配通达信
     """
     C = np.array(closes, dtype=float)
-    ma7 = pd.Series(C).rolling(7, min_periods=7).mean().values
+    ma7 = pd.Series(C).rolling(7, min_periods=1).mean().values
     with np.errstate(divide='ignore', invalid='ignore'):
-        raw = (C - ma7) / ma7 * 480
-    raw[np.isnan(ma7)] = np.nan
+        raw = np.where(ma7 > 0, (C - ma7) / ma7 * 480, 0.0)
     result = _tdx_ema(raw, 2) * 5
     return result
 
@@ -97,13 +97,11 @@ def calc_main_force_line(closes):
 def calc_retail_line(closes):
     """
     散户线: EMA((C-MA(C,11))/MA(C,11)*480, 7)*5
-    输入: numpy数组
-    输出: 同长度numpy数组
+    MA(C,11) 用 min_periods=1 配通达信
     """
     C = np.array(closes, dtype=float)
-    ma11 = pd.Series(C).rolling(11, min_periods=11).mean().values
+    ma11 = pd.Series(C).rolling(11, min_periods=1).mean().values
     with np.errstate(divide='ignore', invalid='ignore'):
-        raw = (C - ma11) / ma11 * 480
-    raw[np.isnan(ma11)] = np.nan
+        raw = np.where(ma11 > 0, (C - ma11) / ma11 * 480, 0.0)
     result = _tdx_ema(raw, 7) * 5
     return result

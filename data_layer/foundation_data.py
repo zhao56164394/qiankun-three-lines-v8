@@ -51,10 +51,6 @@ def load_market_bagua(force_reload: bool = False) -> pd.DataFrame:
     return _load_csv('foundation_market_bagua', 'market_bagua_daily.csv', force_reload)
 
 
-def load_macro_bagua(force_reload: bool = False) -> pd.DataFrame:
-    return _load_csv('foundation_macro_bagua', 'macro_bagua_daily.csv', force_reload)
-
-
 def load_stock_bagua(force_reload: bool = False) -> pd.DataFrame:
     return _load_csv('foundation_stock_bagua', 'stock_bagua_daily.csv', force_reload)
 

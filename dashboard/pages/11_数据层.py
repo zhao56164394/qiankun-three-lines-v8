@@ -219,8 +219,7 @@ Layer 2: update_foundation.py
   ├── 3. daily_5d_scores.csv         5维分数 (势/时/变/重/气)
   ├── 4. daily_forward_returns.csv   前瞻收益 (10/20/60日)
   ├── 5. market_bagua_daily.csv      市场卦 (趋势+动量+广度→三爻)
-  ├── 6. macro_bagua_daily.csv       宏观卦 (月级牛熊节奏)
-  └── 7. stock_bagua_daily.csv       个股卦 (个股级三爻编码)
+  └── 6. stock_bagua_daily.csv       个股卦 (个股级三爻编码)
 ```
 
 ```
@@ -360,7 +359,6 @@ with tab3:
         ('5维分数', 'daily_5d_scores.csv'),
         ('前瞻收益', 'daily_forward_returns.csv'),
         ('市场卦', 'market_bagua_daily.csv'),
-        ('宏观卦', 'macro_bagua_daily.csv'),
         ('个股卦', 'stock_bagua_daily.csv'),
     ]
 

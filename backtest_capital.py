@@ -6,7 +6,7 @@ backtest_capital.py — 回测的数据加载与基础算子
   - 加载中证1000 / 个股 / 股票事件 / 大周期上下文
   - 提供全部卖出函数 (calc_sell_bear / bull / stall / trailing / ...)
   - scan_signals 通用信号扫描
-  - 信号统计辅助 (calc_stats / build_context_stats / summarize_signal_context)
+  - 信号统计辅助 (calc_stats / summarize_signal_context)
 
 本文件已不再承担 crazy/normal 联合策略回测的主流程 —— 八卦分治回测 (backtest_8gua.py)
 取代了旧的 simulate_hybrid 流水线。保留本文件仅作为算子层被其他模块 import。
@@ -21,7 +21,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from data_layer.foundation_data import load_macro_bagua, load_market_bagua
+from data_layer.foundation_data import load_market_bagua
 
 sys.stdout = io.TextIOWrapper(
     open(sys.stdout.fileno(), 'wb', closefd=False),
@@ -38,23 +38,12 @@ from backtest_bt.config import (
 
 
 def load_big_cycle_context():
-    """加载大周期/市场卦上下文，按日期映射。"""
-    macro_df = load_macro_bagua().copy()
+    """加载市场卦上下文，按日期映射。"""
     market_df = load_market_bagua().copy()
-
-    macro_df['date'] = macro_df['date'].astype(str)
     market_df['date'] = market_df['date'].astype(str)
-    macro_df['gua_code'] = macro_df['gua_code'].astype(str).str.zfill(3)
     market_df['gua_code'] = market_df['gua_code'].astype(str).str.zfill(3)
 
-    macro_ctx = {
-        row['date']: {
-            'macro_gua': row['gua_code'],
-            'macro_gua_name': row.get('gua_name', ''),
-        }
-        for _, row in macro_df[['date', 'gua_code', 'gua_name']].drop_duplicates('date').iterrows()
-    }
-    market_ctx = {
+    return {
         row['date']: {
             'ren_gua': row['gua_code'],
             'ren_gua_name': row.get('gua_name', ''),
@@ -62,59 +51,17 @@ def load_big_cycle_context():
         for _, row in market_df[['date', 'gua_code', 'gua_name']].drop_duplicates('date').iterrows()
     }
 
-    all_dates = sorted(set(macro_ctx) | set(market_ctx))
-    return {
-        dt: {
-            'macro_gua': macro_ctx.get(dt, {}).get('macro_gua', ''),
-            'macro_gua_name': macro_ctx.get(dt, {}).get('macro_gua_name', ''),
-            'ren_gua': market_ctx.get(dt, {}).get('ren_gua', ''),
-            'ren_gua_name': market_ctx.get(dt, {}).get('ren_gua_name', ''),
-        }
-        for dt in all_dates
-    }
-
-
-
-def build_context_stats(trades):
-    def _group_stats(group):
-        if not group:
-            return {'trade_count': 0, 'win_rate': 0, 'avg_ret': 0, 'profit': 0}
-        profits = [t.get('profit', 0) for t in group]
-        rets = [t.get('ret_pct', 0) for t in group]
-        wins = sum(1 for p in profits if p > 0)
-        return {
-            'trade_count': len(group),
-            'win_rate': wins / len(group) * 100,
-            'avg_ret': float(np.mean(rets)) if rets else 0,
-            'profit': float(np.sum(profits)) if profits else 0,
-        }
-
-    by_macro = {}
-    by_macro_market = {}
-    for t in trades:
-        macro_gua = str(t.get('macro_gua', '') or '')
-        ren_gua = str(t.get('ren_gua', '') or '')
-        by_macro.setdefault(macro_gua, []).append(t)
-        by_macro_market.setdefault(f'{macro_gua}|{ren_gua}', []).append(t)
-
-    return {
-        'by_macro_gua': {k: _group_stats(v) for k, v in sorted(by_macro.items())},
-        'by_macro_ren_gua': {k: _group_stats(v) for k, v in sorted(by_macro_market.items())},
-    }
 
 
 def summarize_signal_context(sig_df):
     if sig_df is None or len(sig_df) == 0:
         return {
             'signal_count': 0,
-            'macro_gua_counts': {},
             'ren_gua_counts': {},
         }
-    macro_counts = sig_df['macro_gua'].fillna('').astype(str).value_counts().sort_index().to_dict() if 'macro_gua' in sig_df.columns else {}
     ren_counts = sig_df['ren_gua'].fillna('').astype(str).value_counts().sort_index().to_dict() if 'ren_gua' in sig_df.columns else {}
     return {
         'signal_count': int(len(sig_df)),
-        'macro_gua_counts': {str(k): int(v) for k, v in macro_counts.items()},
         'ren_gua_counts': {str(k): int(v) for k, v in ren_counts.items()},
     }
 

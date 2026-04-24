@@ -457,7 +457,7 @@ def load_bagua_debug_frames(source='8gua', use_experiment_baseline=False):
         for col in ['actual_ret', 'hold_days', 'pool_retail']:
             if col in df_signals.columns:
                 df_signals[col] = pd.to_numeric(df_signals[col], errors='coerce')
-        for col in ['gua', 'ren_gua', 'di_gua', 'macro_gua']:
+        for col in ['gua', 'ren_gua', 'di_gua']:
             if col in df_signals.columns:
                 df_signals[col] = df_signals[col].astype(str).str.zfill(3)
         df_signals = df_signals[df_signals['gua'].isin(BAGUA_ORDER)].copy() if 'gua' in df_signals.columns else pd.DataFrame()
@@ -468,7 +468,7 @@ def load_bagua_debug_frames(source='8gua', use_experiment_baseline=False):
         compat_rename_columns(df_trades)
         if 'tian_gua' not in df_trades.columns and 'gua' in df_trades.columns:
             df_trades['tian_gua'] = df_trades['gua']
-        for col in ['gua', 'ren_gua', 'di_gua', 'macro_gua']:
+        for col in ['gua', 'ren_gua', 'di_gua']:
             if col in df_trades.columns:
                 df_trades[col] = df_trades[col].astype(str).str.zfill(3)
         for col in ['ret_pct', 'profit', 'hold_days', 'buy_price', 'sell_price', 'cost']:
@@ -1214,6 +1214,101 @@ def load_market_bagua_visual(start_date=None, end_date=None):
         'yao_1', 'yao_2', 'yao_3',
     ]
     return _load_regime_visual(load_market_bagua, numeric_cols, start_date=start_date, end_date=end_date)
+
+
+MULTI_SCALE_GUA_PATH = os.path.join(DATA_DIR, 'foundation', 'multi_scale_gua_daily.csv')
+
+GUA_MEANINGS_ZH = {
+    '111': '乾 疯牛主升',
+    '110': '兑 牛末滞涨',
+    '101': '离 下跌护盘',
+    '100': '震 崩盘加速',
+    '011': '巽 底部爆发',
+    '010': '坎 反弹乏力',
+    '001': '艮 熊底异动',
+    '000': '坤 深熊探底',
+}
+
+
+def _load_multi_scale_raw():
+    if not os.path.exists(MULTI_SCALE_GUA_PATH):
+        return pd.DataFrame()
+    df = pd.read_csv(MULTI_SCALE_GUA_PATH, encoding='utf-8-sig',
+                     dtype={'d_gua': str, 'm_gua': str, 'y_gua': str})
+    for c in ['d_gua', 'm_gua', 'y_gua']:
+        df[c] = df[c].fillna('').astype(str).str.zfill(3).replace('000', '000')
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_day_gua_visual(start_date=None, end_date=None):
+    """加载日卦 (v10 日线 位/势/变 三爻) 可视化数据"""
+    numeric_cols = ['close', 'd_trend', 'd_mf', 'd_pos', 'd_spd', 'd_acc']
+    df = _load_regime_visual(_load_multi_scale_raw, numeric_cols,
+                             start_date=start_date, end_date=end_date)
+    if len(df) == 0:
+        return df
+    df['gua_code'] = df['d_gua']
+    df['gua_name'] = df['d_gua'].map(lambda g: GUA_MEANINGS_ZH.get(g, '')[:1] if g else '')
+    df['gua_meaning'] = df['gua_code'].map(lambda g: GUA_MEANINGS_ZH.get(g, ''))
+    df['yao_pos'] = df['d_pos']
+    df['yao_spd'] = df['d_spd']
+    df['yao_acc'] = df['d_acc']
+    df['trend'] = df['d_trend']
+    df['main_force'] = df['d_mf']
+    # 页面兼容别名 (old yao_day/week/month)
+    df['yao_day'] = df['d_acc']
+    df['yao_week'] = df['d_spd']
+    df['yao_month'] = df['d_pos']
+    df['changed'] = (df['gua_code'] != df['gua_code'].shift()).astype(int)
+    df.loc[df.index[0], 'changed'] = 0
+    df['seg_id'] = df['changed'].cumsum() + 1
+    df['seg_day'] = df.groupby('seg_id').cumcount() + 1
+    df['prev_gua'] = df['gua_code'].shift()
+    return df.reset_index(drop=True)
+
+
+@st.cache_data(ttl=300)
+def build_day_gua_segments_summary(start_date=None, end_date=None):
+    df = load_day_gua_visual(start_date=start_date, end_date=end_date)
+    if len(df) == 0:
+        return pd.DataFrame()
+    rows = []
+    for seg_id, grp in df.groupby('seg_id', sort=True):
+        gua = grp['gua_code'].iloc[0]
+        name = grp['gua_name'].iloc[0]
+        days = len(grp)
+        close_start = grp['close'].iloc[0]
+        close_end = grp['close'].iloc[-1]
+        seg_ret = (close_end / close_start - 1) * 100 if close_start and not pd.isna(close_start) else pd.NA
+        rows.append({
+            'seg_id': int(seg_id),
+            '开始日': grp['date'].iloc[0].strftime('%Y-%m-%d'),
+            '结束日': grp['date'].iloc[-1].strftime('%Y-%m-%d'),
+            '卦码': gua,
+            '卦名': name,
+            '卦意': GUA_MEANINGS_ZH.get(gua, ''),
+            '持续天数': days,
+            '段内涨跌幅%': round(float(seg_ret), 2) if pd.notna(seg_ret) else None,
+            'trend均': round(float(grp['trend'].mean()), 1) if grp['trend'].notna().any() else None,
+            '主力均': round(float(grp['main_force'].mean()), 1) if grp['main_force'].notna().any() else None,
+        })
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=300)
+def build_day_gua_summary(start_date=None, end_date=None):
+    df = load_day_gua_visual(start_date=start_date, end_date=end_date)
+    if len(df) == 0:
+        return pd.DataFrame()
+    cnt = df.groupby('gua_code').size().reset_index(name='天数')
+    cnt['卦名'] = cnt['gua_code'].map(GUA_MEANINGS_ZH)
+    total = cnt['天数'].sum()
+    cnt['占比%'] = (cnt['天数'] / total * 100).round(2) if total > 0 else 0
+    order = ['111', '110', '101', '100', '011', '010', '001', '000']
+    cnt['_order'] = cnt['gua_code'].map({g: i for i, g in enumerate(order)})
+    cnt = cnt.sort_values('_order').drop(columns=['_order']).reset_index(drop=True)
+    return cnt
 
 
 @st.cache_data(ttl=300)

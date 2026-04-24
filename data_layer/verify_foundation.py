@@ -27,7 +27,6 @@ VERIFY_FILES = [
     'daily_3yao.csv',
     'daily_bagua_sequence.csv',
     'market_bagua_daily.csv',
-    'macro_bagua_daily.csv',
     'daily_forward_returns.csv',
 ]
 MARKET_PERIODS = {

@@ -28,7 +28,7 @@ from backtest_capital import (
     calc_sell_bear, calc_sell_bull, calc_sell_stall,
     calc_sell_trailing, calc_sell_trend_break,
     YEAR_START, YEAR_END, INIT_CAPITAL, DATA_DIR,
-    load_big_cycle_context, build_context_stats, summarize_signal_context,
+    load_big_cycle_context, summarize_signal_context,
 )
 from data_layer.foundation_data import load_stock_bagua_map, load_market_bagua, load_daily_bagua
 from data_layer.gua_data import clean_gua as _clean_gua, GUA_DISPLAY_NAMES as GUA_NAMES
@@ -103,16 +103,12 @@ UNIFIED_POOL_THRESHOLD = -250  # 统一入池阈值(fallback)
 GUA_STRATEGY = {
     '000': {'sell': 'kun_bear', 'active': True,
             'pool_threshold': -250,
-            # tiers 生效时, 覆盖 pool_depth / pool_days_min/max 的单独设置
             'pool_depth': None,
             'pool_days_min': None, 'pool_days_max': None,
+            # 方案 α: 任何池深都接受, 但排除池天 4-10 (磨底死区)
+            # 八卦: 0-3天=极而复反, 11+天=物极必反; 4-10天=阴中无阳磨底, 必亏
             'pool_depth_tiers': [
-                # 深池: 任意池天 (跌透了, 反弹概率高)
-                {'depth_max': -500, 'days_min': None, 'days_max': None},
-                # 中池: 仅接受熬够 11-20 天的长期困兽
-                {'depth_max': -350, 'days_min': 11,   'days_max': 20},
-                # 浅池: 仅接受当天或隔日入池 (刚跌到位立刻反)
-                {'depth_max': -250, 'days_min': 0,    'days_max': 1},
+                {'depth_max': None, 'days_min': 0, 'days_max': None, 'days_exclude': [4, 10]},
             ],
             'kun_buy': True,
             'kun_exclude_ren_gua': {'000', '110'},
@@ -196,9 +192,9 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
 
     def _pool_depth_tier_ok(strat, pool_retail_min, pool_days):
         """按池深分档的池深+池天联合验证。
-        tiers = [{'depth_max': -500, 'days_min': None, 'days_max': None}, ...]
+        tiers = [{'depth_max': -500, 'days_min': None, 'days_max': None, 'days_exclude': None}, ...]
           按从深到浅顺序: 第一个 pool_retail_min <= depth_max 的档位生效；
-          生效档位再验 days_min/days_max。
+          生效档位验 days_min/days_max, 再验 days_exclude (可选的禁止区间 [a,b])。
           设 depth_max=None 表示此档位无深度下限 (兜底)。
         返回 (ok: bool, reject_reason: str|None)
           reason 仅 ok=False 时有值: 'pool_depth' 或 'pool_days'
@@ -223,11 +219,16 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
             if depth_max is None or pool_retail_min <= depth_max:
                 days_min = tier.get('days_min')
                 days_max = tier.get('days_max')
+                days_exclude = tier.get('days_exclude')  # [a, b] 禁止池天在 [a,b] 之间
                 if pool_days is not None:
                     if days_min is not None and pool_days < days_min:
                         return False, 'pool_days'
                     if days_max is not None and pool_days > days_max:
                         return False, 'pool_days'
+                    if days_exclude is not None:
+                        ex_min, ex_max = days_exclude
+                        if ex_min <= pool_days <= ex_max:
+                            return False, 'pool_days'
                 return True, None
         return False, 'pool_depth'  # 没匹配任何档位 → 池太浅
 
@@ -287,8 +288,6 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
             ren_gua = _clean_gua(ren_gua_ctx.get('gua_code', ''))
             ren_gua_name = ren_gua_ctx.get('gua_name', '')
             context = big_cycle_context.get(dt_str, {}) if big_cycle_context else {}
-            macro_gua = context.get('macro_gua', '')
-            macro_gua_name = context.get('macro_gua_name', '')
 
             # ============================================================
             # 共享池: 入池 → 各卦分支的 pool_depth 做二次验证
@@ -349,8 +348,6 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                     
                                         'tian_gua': tian_gua,
                                         'sell_method': 'qian_bull',
-                                        'macro_gua': macro_gua,
-                                        'macro_gua_name': macro_gua_name,
                                         'ren_gua': ren_gua,
                                         'ren_gua_name': ren_gua_name,
                                         'tian_gua_name': tian_gua_name,
@@ -428,8 +425,6 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                 
                                     'tian_gua': tian_gua,
                                     'sell_method': dui_sell_method,
-                                    'macro_gua': macro_gua,
-                                    'macro_gua_name': macro_gua_name,
                                     'ren_gua': ren_gua,
                                     'ren_gua_name': ren_gua_name,
                                     'tian_gua_name': tian_gua_name,
@@ -495,8 +490,6 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                 
                                     'tian_gua': tian_gua,
                                     'sell_method': f'gen_{gen_sell_method}',
-                                    'macro_gua': macro_gua,
-                                    'macro_gua_name': macro_gua_name,
                                     'ren_gua': ren_gua,
                                     'ren_gua_name': ren_gua_name,
                                     'tian_gua_name': tian_gua_name,
@@ -567,8 +560,6 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                 
                                     'tian_gua': tian_gua,
                                     'sell_method': f'kun_{kun_exec_method}',
-                                    'macro_gua': macro_gua,
-                                    'macro_gua_name': macro_gua_name,
                                     'ren_gua': ren_gua,
                                     'ren_gua_name': ren_gua_name,
                                     'tian_gua_name': tian_gua_name,
@@ -644,8 +635,6 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
         
                             'tian_gua': tian_gua,
                             'sell_method': 'xun_bear',
-                            'macro_gua': macro_gua,
-                            'macro_gua_name': macro_gua_name,
                             'ren_gua': ren_gua,
                             'ren_gua_name': ren_gua_name,
                             'tian_gua_name': tian_gua_name,
@@ -712,8 +701,6 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                 
                                     'tian_gua': tian_gua,
                                     'sell_method': f'zhen_{zhen_sell_method}',
-                                    'macro_gua': macro_gua,
-                                    'macro_gua_name': macro_gua_name,
                                     'ren_gua': ren_gua,
                                     'ren_gua_name': ren_gua_name,
                                     'tian_gua_name': tian_gua_name,
@@ -780,8 +767,6 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                 
                                     'tian_gua': tian_gua,
                                     'sell_method': f'li_{li_sell_method}',
-                                    'macro_gua': macro_gua,
-                                    'macro_gua_name': macro_gua_name,
                                     'ren_gua': ren_gua,
                                     'ren_gua_name': ren_gua_name,
                                     'tian_gua_name': tian_gua_name,
@@ -851,8 +836,6 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
 
                     'tian_gua': tian_gua,
                     'sell_method': strat['sell'],
-                    'macro_gua': macro_gua,
-                    'macro_gua_name': macro_gua_name,
                     'ren_gua': ren_gua,
                     'ren_gua_name': ren_gua_name,
                     'tian_gua_name': tian_gua_name,
@@ -922,8 +905,6 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
                     'di_gua': pos.get('di_gua', pos.get('combo', '???')),
                     'di_gua_name': pos.get('di_gua_name', ''),
                     'sell_method': pos.get('sell_method', '?'),
-                    'macro_gua': pos.get('macro_gua', ''),
-                    'macro_gua_name': pos.get('macro_gua_name', ''),
                     'tian_gua': pos.get('tian_gua', ''),
                     'tian_gua_name': pos.get('tian_gua_name', ''),
                     'ren_gua': pos.get('ren_gua', ''),
@@ -979,8 +960,6 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
                         'di_gua': c.get('di_gua', c.get('combo', '???')),
                         'di_gua_name': c.get('di_gua_name', ''),
                         'sell_method': c.get('sell_method', '?'),
-                        'macro_gua': c.get('macro_gua', ''),
-                        'macro_gua_name': c.get('macro_gua_name', ''),
                         'tian_gua': c.get('tian_gua', ''),
                         'tian_gua_name': c.get('tian_gua_name', ''),
                         'ren_gua': c.get('ren_gua', ''),
@@ -1007,8 +986,6 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
             'hold_days': pos['hold_days'],
             'gua': pos.get('gua', '???'),
             'sell_method': pos.get('sell_method', '?'),
-            'macro_gua': pos.get('macro_gua', ''),
-            'macro_gua_name': pos.get('macro_gua_name', ''),
             'tian_gua': pos.get('tian_gua', ''),
             'tian_gua_name': pos.get('tian_gua_name', ''),
         })
@@ -1134,7 +1111,6 @@ def run(start_date=None, end_date=None, init_capital=None):
 
     print(f"  总信号: {len(sig)}, 非skip: {(~sig['is_skip']).sum()}")
     signal_context = summarize_signal_context(sig)
-    print(f"  大周期 macro 分布: {signal_context['macro_gua_counts']}")
     print(f"  天卦 tian 分布: {signal_context.get('tian_gua_counts', {})}")
 
     # 分卦信号统计
@@ -1150,7 +1126,6 @@ def run(start_date=None, end_date=None, init_capital=None):
                            init_capital=capital, tian_gua_map_ext=tian_gua_map)
     stats = calc_stats(result, '八卦分治')
     trades = result['trade_log']
-    context_stats = build_context_stats(trades)
     gua_context_stats = build_gua_context_stats(trades)
 
     # ============================================================
@@ -1284,7 +1259,6 @@ def run(start_date=None, end_date=None, init_capital=None):
         'signal_detail': sig.to_dict('records'),
         'yearly': yearly,
         'gua_strategy': {g: {k: (sorted(v) if isinstance(v, set) else v) for k, v in s.items()} for g, s in GUA_STRATEGY.items()},
-        'context_stats': context_stats,
         'gua_context_stats': gua_context_stats,
         'signal_context': signal_context,
     }

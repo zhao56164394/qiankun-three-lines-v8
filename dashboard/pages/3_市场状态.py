@@ -23,10 +23,10 @@ from dashboard.components.gua_compass import (
 from dashboard.components.data_loader import (
     load_backtest_8gua_extra, GUA_NAMES, GUA_COLORS,
     load_signals_by_date, load_trades_by_date,
-    load_market_bagua_visual, build_market_bagua_segments_summary, build_market_bagua_change_windows,
-    build_market_bagua_gua_summary, load_market_proxy_index,
+    load_market_proxy_index,
+    load_day_gua_visual, build_day_gua_segments_summary, build_day_gua_summary,
 )
-from dashboard.components.lwc_charts import render_market_bagua_chart, render_market_regime_index_chart
+from dashboard.components.lwc_charts import render_market_regime_index_chart
 
 st.set_page_config(page_title="市场状态", page_icon="☰", layout="wide")
 st.title("☰ 市场状态")
@@ -359,47 +359,48 @@ try:
 except Exception as e:
     st.warning(f"卦象历史加载失败: {e}")
 
+
 # ================================================================
-# 市场爻可视化核对
+# 日卦可视化核对 (底座卦: 日/月/年 三尺度的日线视角)
 # ================================================================
 st.markdown("---")
-st.markdown("### 📺 市场爻可视化核对")
-st.caption("天卦(市场卦)可视化核对，验证三爻编码与市场节奏是否吻合。")
+st.markdown("### 📺 日卦可视化核对")
+st.caption("日卦 (v10 日线 位/势/变, 滞后带) — 位爻=trend≥50 / 势爻=日差±2滞后+89高位保护 / 变爻=主力±30滞后")
 
 try:
-    market_full = load_market_bagua_visual()
-    if len(market_full) == 0:
-        st.info("market_bagua_daily.csv 暂无数据")
+    bb_full = load_day_gua_visual()
+    if len(bb_full) == 0:
+        st.info("multi_scale_gua_daily.csv 暂无数据；请先运行 data_layer/prepare_multi_scale_gua.py")
     else:
-        m_min = market_full['date'].min().date()
-        m_max = market_full['date'].max().date()
+        m_min = bb_full['date'].min().date()
+        m_max = bb_full['date'].max().date()
 
         vc1, vc2, vc3, vc4, vc5, vc6 = st.columns([1.0, 1.0, 1.0, 0.85, 0.95, 1.0])
         with vc1:
-            st.markdown("**天卦**")
+            st.markdown("**日卦**")
         with vc2:
-            viz_start = st.date_input("核对起始日", value=m_min, min_value=m_min, max_value=m_max, key="market_bagua_viz_start")
+            viz_start = st.date_input("核对起始日", value=m_min, min_value=m_min, max_value=m_max, key="bb_viz_start")
         with vc3:
-            viz_end = st.date_input("核对结束日", value=m_max, min_value=m_min, max_value=m_max, key="market_bagua_viz_end")
+            viz_end = st.date_input("核对结束日", value=m_max, min_value=m_min, max_value=m_max, key="bb_viz_end")
         with vc4:
-            changed_only = st.checkbox("只看变卦事件", value=False)
+            changed_only = st.checkbox("只看变卦事件", value=False, key="bb_changed_only")
         with vc5:
-            selected_seg = st.number_input("定位 segment", min_value=0, value=0, step=1, help="填 0 表示不过滤")
+            selected_seg = st.number_input("定位 segment", min_value=0, value=0, step=1, help="填 0 表示不过滤", key="bb_sel_seg")
         with vc6:
-            index_name = st.selectbox("主图指数", ['中证1000', '沪深300', '中证500', '全A', '上证', '深证'], index=0)
+            index_name = st.selectbox("主图指数", ['中证1000', '沪深300', '中证500', '全A', '上证', '深证'], index=0, key="bb_index_name")
 
-        market_viz = load_market_bagua_visual(start_date=str(viz_start), end_date=str(viz_end))
+        market_viz = load_day_gua_visual(start_date=str(viz_start), end_date=str(viz_end)).copy()
         market_viz['gua_code'] = market_viz['gua_code'].astype(str).str.zfill(3)
-        meaning_map = {
-            code: BAGUA_INFO.get(code, {}).get('meaning', '') for code in ['000', '001', '010', '011', '100', '101', '110', '111']
-        }
-        market_viz['gua_meaning'] = market_viz['gua_code'].map(lambda x: meaning_map.get(str(x).zfill(3), ''))
+        from dashboard.components.data_loader import GUA_MEANINGS_ZH as _BB_MEAN
+        market_viz['gua_meaning'] = market_viz['gua_code'].map(lambda x: _BB_MEAN.get(str(x).zfill(3), ''))
         market_viz['prev_gua_display'] = ''
         if 'prev_gua' in market_viz.columns:
             prev_mask = market_viz['prev_gua'].notna()
-            market_viz.loc[prev_mask, 'prev_gua_display'] = market_viz.loc[prev_mask, 'prev_gua'].map(
-                lambda x: str(int(float(x))).zfill(3) if pd.notna(x) else ''
-            )
+            market_viz.loc[prev_mask, 'prev_gua_display'] = market_viz.loc[prev_mask, 'prev_gua'].astype(str).str.zfill(3)
+        # render_market_regime_index_chart 需要 yao_1/yao_2/yao_3
+        market_viz['yao_1'] = market_viz['yao_pos']
+        market_viz['yao_2'] = market_viz['yao_spd']
+        market_viz['yao_3'] = market_viz['yao_acc']
         if selected_seg > 0:
             market_viz = market_viz[market_viz['seg_id'] == selected_seg].copy()
         elif changed_only:
@@ -415,41 +416,32 @@ try:
         if len(market_viz) == 0:
             st.warning("当前筛选条件下无可视化数据")
         else:
-            seg_summary = build_market_bagua_segments_summary(start_date=str(viz_start), end_date=str(viz_end))
-            change_windows = build_market_bagua_change_windows(start_date=str(viz_start), end_date=str(viz_end))
-            gua_summary = build_market_bagua_gua_summary(start_date=str(viz_start), end_date=str(viz_end))
+            seg_summary = build_day_gua_segments_summary(start_date=str(viz_start), end_date=str(viz_end))
+            gua_summary = build_day_gua_summary(start_date=str(viz_start), end_date=str(viz_end))
             index_df = load_market_proxy_index(index_name=index_name, start_date=str(viz_start), end_date=str(viz_end))
             if selected_seg > 0:
                 seg_summary = seg_summary[seg_summary['seg_id'] == selected_seg].copy()
-                change_windows = change_windows[change_windows['segment'] == selected_seg].copy()
                 index_df = index_df[index_df['date'].isin(market_viz['date'])].copy() if len(index_df) > 0 else index_df
 
             avg_seg = seg_summary['持续天数'].mean() if len(seg_summary) > 0 else 0.0
-            short_seg_ratio = (seg_summary['持续天数'] <= 2).mean() if len(seg_summary) > 0 else 0.0
+            short_seg_ratio = (seg_summary['持续天数'] <= 5).mean() if len(seg_summary) > 0 else 0.0
             change_count = int(market_viz['changed'].sum())
             current_gua = market_viz.iloc[-1]['gua_name'] if len(market_viz) > 0 else '-'
             last_row = market_viz.iloc[-1]
-            regime_label = '天卦'
-
-            latest_seg_summary = pd.DataFrame()
-            if len(seg_summary) > 0 and pd.notna(last_row.get('seg_id')):
-                latest_seg_summary = seg_summary[seg_summary['seg_id'] == last_row['seg_id']].copy()
-            current_seg_start = latest_seg_summary.iloc[0]['开始日'] if len(latest_seg_summary) > 0 else '-'
-            current_seg_end = latest_seg_summary.iloc[0]['结束日'] if len(latest_seg_summary) > 0 else '-'
-            current_seg_return = latest_seg_summary.iloc[0]['段内涨跌幅%'] if len(latest_seg_summary) > 0 else pd.NA
+            regime_label = '日卦'
 
             mc1, mc2, mc3, mc4 = st.columns(4)
             mc1.metric("区间交易日", f"{len(market_viz)}")
             mc2.metric("变卦次数", f"{change_count}")
             mc3.metric("平均段长", f"{avg_seg:.1f}")
-            mc4.metric("短段占比", f"{short_seg_ratio * 100:.1f}%", help="1~2天 segment 占比")
-            current_meaning = BAGUA_INFO.get(str(last_row['gua_code']).zfill(3), {}).get('meaning', '-')
+            mc4.metric("短段占比(≤5天)", f"{short_seg_ratio * 100:.1f}%")
+            current_meaning = _BB_MEAN.get(str(last_row['gua_code']).zfill(3), '-')
             prev_gua_text = '-'
             if 'prev_gua_display' in last_row.index and str(last_row['prev_gua_display']).strip() not in ('', 'nan'):
-                prev_info = BAGUA_INFO.get(str(last_row['prev_gua_display']).zfill(3), {})
-                prev_gua_text = f"{prev_info.get('name', str(last_row['prev_gua_display']).zfill(3))}({str(last_row['prev_gua_display']).zfill(3)})"
+                pcode = str(last_row['prev_gua_display']).zfill(3)
+                prev_gua_text = f"{_BB_MEAN.get(pcode, pcode)} ({pcode})"
             st.caption(
-                f"当前层级: {regime_label} | 主图采用: {index_name} 日线 | 背景按 segment 显示天卦 | "
+                f"当前层级: {regime_label} | 主图采用: {index_name} 日线 | 背景按 segment 显示日卦 | "
                 f"当前最后一卦: {current_gua} · {current_meaning}"
             )
 
@@ -462,15 +454,14 @@ try:
                     {'字段': '当前卦', '值': f"{last_row['gua_name']} ({last_row['gua_code']})"},
                     {'字段': '前卦', '值': prev_gua_text},
                     {'字段': '卦意', '值': current_meaning},
-                    {'字段': '一爻', '值': int(last_row['yao_1'])},
-                    {'字段': '二爻', '值': int(last_row['yao_2'])},
-                    {'字段': '三爻', '值': int(last_row['yao_3'])},
+                    {'字段': '位爻 (trend≥50)', '值': int(last_row['yao_pos']) if pd.notna(last_row.get('yao_pos')) else '-'},
+                    {'字段': '势爻 (日差±2+89保护)', '值': int(last_row['yao_spd']) if pd.notna(last_row.get('yao_spd')) else '-'},
+                    {'字段': '变爻 (主力±30)', '值': int(last_row['yao_acc']) if pd.notna(last_row.get('yao_acc')) else '-'},
                 ]
                 explain_rows.extend([
-                    {'字段': 'trend_55', '值': round(float(last_row['market_trend_55']), 3) if pd.notna(last_row['market_trend_55']) else '-'},
-                    {'字段': 'trend_anchor_120', '值': round(float(last_row['market_trend_anchor_120']), 3) if pd.notna(last_row['market_trend_anchor_120']) else '-'},
-                    {'字段': 'speed_20', '值': round(float(last_row['market_speed_20']), 4) if pd.notna(last_row['market_speed_20']) else '-'},
-                    {'字段': 'enhanced_breadth', '值': round(float(last_row['enhanced_breadth_momo']), 4) if pd.notna(last_row['enhanced_breadth_momo']) else '-'},
+                    {'字段': 'close', '值': round(float(last_row['close']), 0) if pd.notna(last_row.get('close')) else '-'},
+                    {'字段': 'trend', '值': round(float(last_row['trend']), 1) if pd.notna(last_row.get('trend')) else '-'},
+                    {'字段': '主力线', '值': round(float(last_row['main_force']), 1) if pd.notna(last_row.get('main_force')) else '-'},
                 ])
                 explain_rows.extend([
                     {'字段': 'segment', '值': int(last_row['seg_id']) if pd.notna(last_row['seg_id']) else '-'},
@@ -482,7 +473,7 @@ try:
                 st.markdown('#### 区间卦分布')
                 if len(gua_summary) > 0:
                     fig_gua = go.Figure(go.Bar(
-                        x=gua_summary['gua_name'],
+                        x=gua_summary['卦名'].astype(str).str.slice(0, 2),
                         y=gua_summary['天数'],
                         text=gua_summary['占比%'].map(lambda x: f'{x:.1f}%'),
                         textposition='outside',
@@ -494,13 +485,11 @@ try:
                 else:
                     st.info('当前区间无卦分布数据')
 
-            with st.expander('辅助图：市场代理K线 + 趋势锚线', expanded=False):
-                render_market_bagua_chart(market_viz, title=f"市场代理K线 + 天卦辅助图")
-
+            # 三爻阶梯图
             fig_yao = go.Figure()
-            yao_colors = {'yao_1': '#f59e0b', 'yao_2': '#60a5fa', 'yao_3': '#34d399'}
-            yao_names = {'yao_1': '一爻', 'yao_2': '二爻', 'yao_3': '三爻'}
-            for idx, col in enumerate(['yao_1', 'yao_2', 'yao_3']):
+            yao_colors = {'yao_pos': '#ef4444', 'yao_spd': '#f59e0b', 'yao_acc': '#34d399'}
+            yao_names = {'yao_pos': '位爻 (trend≥50)', 'yao_spd': '势爻 (日差±2)', 'yao_acc': '变爻 (主力±30)'}
+            for idx, col in enumerate(['yao_pos', 'yao_spd', 'yao_acc']):
                 fig_yao.add_trace(go.Scatter(
                     x=market_viz['date'],
                     y=market_viz[col] + idx * 1.3,
@@ -510,51 +499,33 @@ try:
                     customdata=market_viz[['gua_name', 'gua_code', 'seg_day']].values,
                     hovertemplate='%{x|%Y-%m-%d}<br>' + yao_names[col] + ': %{y:.0f}<br>卦: %{customdata[0]} %{customdata[1]}<br>段内第 %{customdata[2]} 天<extra></extra>',
                 ))
-            fig_yao.update_layout(height=230, yaxis=dict(showticklabels=False), title='三爻阶梯图')
+            fig_yao.update_layout(height=230, yaxis=dict(showticklabels=False), title='三爻阶梯图 (位|势|变)')
             apply_dark_theme(fig_yao)
             st.plotly_chart(fig_yao, use_container_width=True)
 
+            # 驱动因子: 趋势线 + 主力线
             fig_drv = go.Figure()
-            fig_drv.add_trace(go.Scatter(
-                x=market_viz['date'], y=market_viz['market_speed_20'], mode='lines',
-                name='market_speed_20', line=dict(color='#60a5fa', width=2),
-            ))
-            fig_drv.add_trace(go.Scatter(
-                x=market_viz['date'], y=market_viz['enhanced_breadth_momo'], mode='lines',
-                name='enhanced_breadth_momo', line=dict(color='#f59e0b', width=2),
-            ))
-            fig_drv.update_layout(height=260, title='驱动因子：速度 + 广度')
-            fig_drv.add_hline(y=0, line_width=1, line_dash='dot', line_color='#888')
+            fig_drv.add_trace(go.Scatter(x=market_viz['date'], y=market_viz['trend'], mode='lines',
+                name='趋势线', line=dict(color='#34d399', width=1.5)))
+            fig_drv.add_trace(go.Scatter(x=market_viz['date'], y=market_viz['main_force'], mode='lines',
+                name='主力线', line=dict(color='#ef4444', width=1.5), yaxis='y2'))
+            fig_drv.add_hline(y=50, line_width=1, line_dash='dot', line_color='#888', annotation_text='位爻 50')
+            fig_drv.add_hline(y=89, line_width=1, line_dash='dot', line_color='#f87171', annotation_text='89 高位保护')
+            fig_drv.update_layout(
+                height=260, title='驱动因子: 趋势线 + 主力线',
+                yaxis=dict(title='趋势线'),
+                yaxis2=dict(title='主力线', overlaying='y', side='right', zeroline=True, zerolinecolor='#888'),
+            )
             apply_dark_theme(fig_drv)
             st.plotly_chart(fig_drv, use_container_width=True)
 
-            fig_diag = go.Figure()
-            fig_diag.add_trace(go.Bar(
-                x=market_viz['date'], y=market_viz['limit_heat'], name='limit_heat', marker_color='#34d399'
-            ))
-            fig_diag.add_trace(go.Scatter(
-                x=market_viz['date'], y=market_viz['limit_quality'], mode='lines',
-                name='limit_quality', line=dict(color='#ef4444', width=2),
-            ))
-            fig_diag.update_layout(height=260, title='情绪诊断：涨停热度 + 涨停质量', barmode='overlay')
-            apply_dark_theme(fig_diag)
-            st.plotly_chart(fig_diag, use_container_width=True)
-
-            col_seg, col_evt = st.columns([1.1, 1])
-            with col_seg:
-                st.markdown('#### Segment 摘要')
-                show_seg = seg_summary[['开始日', '结束日', '卦名', '卦码', '持续天数', '段内涨跌幅%', '速度均值', '广度均值']].copy() if len(seg_summary) > 0 else pd.DataFrame()
-                if len(show_seg) > 0:
-                    st.dataframe(show_seg, use_container_width=True, hide_index=True, height=320)
-                else:
-                    st.info('当前区间无 segment 摘要')
-            with col_evt:
-                st.markdown('#### 变卦事件窗口')
-                show_evt = change_windows[['日期', '前卦', '现卦', '卦名', '卦意', '前看涨跌幅%', '后看涨跌幅%', '当日速度', '当日广度']].copy() if len(change_windows) > 0 else pd.DataFrame()
-                if len(show_evt) > 0:
-                    st.dataframe(show_evt, use_container_width=True, hide_index=True, height=320)
-                else:
-                    st.info('当前区间无变卦事件')
+            st.markdown('#### Segment 摘要')
+            if len(seg_summary) > 0:
+                show_seg = seg_summary[['开始日', '结束日', '卦名', '卦码', '卦意', '持续天数', '段内涨跌幅%', 'trend均', '主力均']].copy()
+                st.dataframe(show_seg, use_container_width=True, hide_index=True, height=320)
+            else:
+                st.info('当前区间无 segment 摘要')
 except Exception as e:
-    st.warning(f"市场爻可视化加载失败: {e}")
-
+    import traceback
+    st.warning(f"日卦可视化加载失败: {e}")
+    st.code(traceback.format_exc())
