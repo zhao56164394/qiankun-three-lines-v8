@@ -152,6 +152,14 @@ def update_daily_bagua():
     print(f'增量更新完成: 新增 {len(new_bagua)} 行')
     print(f'日期范围: {combined["date"].min()} ~ {combined["date"].max()}')
     print(f'总样本数: {len(combined)}')
+
+    # 同步 Parquet（迁移期双轨支持）
+    try:
+        from data_layer.update_foundation import _sync_parquet
+        _sync_parquet(bagua_path)
+        _sync_parquet(yao_path)
+    except Exception as e:
+        print(f'  ⚠ Parquet 同步失败: {e}')
     return new_yao, new_bagua
 
 

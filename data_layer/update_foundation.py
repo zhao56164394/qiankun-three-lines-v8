@@ -30,6 +30,8 @@ DATA_DEPENDENCIES = {
     'daily_bagua_sequence.csv':   ['daily_5d_scores.csv'],
     'market_bagua_daily.csv':     ['daily_cross_section.csv', 'daily_5d_scores.csv'],
     'stock_bagua_daily.csv':      ['daily_cross_section.csv', 'daily_5d_scores.csv'],
+    # 日/月/年 三尺度卦 — 分治主底座, 依赖 zz1000_daily.csv (外部维护)
+    'multi_scale_gua_daily.csv':  [],
 }
 
 REBUILD_MAP = {
@@ -39,6 +41,7 @@ REBUILD_MAP = {
     'daily_bagua_sequence.csv':   ('data_layer.prepare_daily_bagua',        'update_daily_bagua'),
     'market_bagua_daily.csv':     ('data_layer.prepare_market_bagua',       'build_market_bagua'),
     'stock_bagua_daily.csv':      ('data_layer.prepare_stock_bagua',        'build_stock_bagua'),
+    'multi_scale_gua_daily.csv':  ('data_layer.prepare_multi_scale_gua',    'main'),
 }
 
 
@@ -49,6 +52,25 @@ def _get_last_date(csv_path, date_col='date'):
     if df.empty:
         return None
     return str(df[date_col].iloc[-1])
+
+
+def _sync_parquet(csv_path):
+    """CSV 更新后同步重写对应 Parquet（迁移期双轨支持）。"""
+    if not os.path.exists(csv_path):
+        return
+    pq_path = os.path.splitext(csv_path)[0] + '.parquet'
+    try:
+        df = pd.read_csv(csv_path, encoding='utf-8-sig', low_memory=False)
+        if 'code' in df.columns:
+            df['code'] = df['code'].astype('string').str.zfill(6)
+        if 'gua_code' in df.columns:
+            df['gua_code'] = df['gua_code'].astype('string').str.zfill(3)
+        for col in ['d_gua', 'm_gua', 'y_gua']:
+            if col in df.columns:
+                df[col] = df[col].astype('string').str.zfill(3)
+        df.to_parquet(pq_path, engine='pyarrow', compression='snappy', index=False)
+    except Exception as e:
+        print(f'  ⚠ Parquet 同步失败 ({os.path.basename(pq_path)}): {e}')
 
 
 def _next_day(date_str):
@@ -102,6 +124,7 @@ def update_universe():
     new_df.to_csv(path, mode='a', index=False, header=False, encoding='utf-8-sig')
     new_last = _get_last_date(path)
     print(f'  OK 主板样本池: → {new_last} (+{len(new_df)}行)')
+    _sync_parquet(path)
     return new_df
 
 
@@ -145,6 +168,7 @@ def update_cross_section():
     new_df.to_csv(path, mode='a', index=False, header=False, encoding='utf-8-sig')
     new_last = _get_last_date(path)
     print(f'  OK 截面数据: → {new_last} (+{len(new_df)}行)')
+    _sync_parquet(path)
     return new_df
 
 
@@ -185,6 +209,7 @@ def update_5d_scores(new_cross_df=None):
     new_scores.to_csv(path, mode='a', index=False, header=False, encoding='utf-8-sig')
     new_last = _get_last_date(path)
     print(f'  OK 5维分数: → {new_last} (+{len(new_scores)}行)')
+    _sync_parquet(path)
     return new_scores
 
 
@@ -235,6 +260,7 @@ def update_forward_returns(new_cross_df=None):
 
     new_last = _get_last_date(path)
     print(f'  OK 前瞻收益: → {new_last} (回填+新增)')
+    _sync_parquet(path)
     return combined
 
 
@@ -376,6 +402,7 @@ def update_market_bagua(new_cross_df=None, new_scores_df=None):
 
     market.to_csv(path, index=False, encoding='utf-8-sig')
     print(f'  OK 市场卦: → {market["date"].iloc[-1]} ({len(market)}行)')
+    _sync_parquet(path)
     return market
 
 
@@ -487,6 +514,7 @@ def update_stock_bagua(new_cross_df=None, new_scores_df=None):
     full.to_csv(path, index=False, encoding='utf-8-sig')
     new_last = str(full['date'].max())
     print(f'  OK 个股卦: → {new_last} (+{len(new_stock)}行, 共{len(full)}行)')
+    _sync_parquet(path)
     return new_stock
 
 
@@ -536,6 +564,7 @@ def rebuild_stale():
         'daily_bagua_sequence.csv',
         'market_bagua_daily.csv',
         'stock_bagua_daily.csv',
+        'multi_scale_gua_daily.csv',
     ]
     done_modules = set()
 
@@ -575,8 +604,9 @@ def check_status():
         ('每日截面', 'daily_cross_section.csv'),
         ('5维分数', 'daily_5d_scores.csv'),
         ('前瞻收益', 'daily_forward_returns.csv'),
-        ('市场卦', 'market_bagua_daily.csv'),
-        ('个股卦', 'stock_bagua_daily.csv'),
+        ('天卦 (市场)', 'market_bagua_daily.csv'),
+        ('地卦 (个股)', 'stock_bagua_daily.csv'),
+        ('日/月/年卦', 'multi_scale_gua_daily.csv'),
     ]
     print('=' * 60)
     print('  Foundation 数据状态')
@@ -619,6 +649,7 @@ def _patch_cross_section_index():
     if patched:
         cross.to_csv(cross_path, index=False, encoding='utf-8-sig')
         print(f'  csi1000_close 已补丁: {patched}')
+        _sync_parquet(cross_path)
     else:
         print(f'  csi1000_close 无需补丁')
 
@@ -636,30 +667,46 @@ def _rebuild_baseline_snapshot_safe():
         print(f'  !! 裸跑快照重建失败: {e}')
 
 
+def update_multi_scale_gua():
+    """日/月/年 三尺度卦 (分治主底座)
+    依赖 zz1000_daily.csv (外部维护), 每次全量重算 (~5000 天, 秒级).
+    """
+    path = foundation_file('multi_scale_gua_daily.csv')
+    last = _get_last_date(path) if os.path.exists(path) else None
+    from data_layer.prepare_multi_scale_gua import main as build_ms
+    build_ms()
+    new_last = _get_last_date(path)
+    print(f'  日/月/年卦: {last} -> {new_last}')
+    _sync_parquet(path)
+
+
 def update_all():
     print('=' * 60)
     print(f'  Foundation 增量更新')
     print('=' * 60)
     t0 = time.time()
 
-    print('\n[1/6] 主板样本池')
+    print('\n[1/7] 主板样本池')
     update_universe()
 
-    print('\n[2/6] 每日截面')
+    print('\n[2/7] 每日截面')
     new_cross = update_cross_section()
     _patch_cross_section_index()
 
-    print('\n[3/6] 5维分数')
+    print('\n[3/7] 5维分数')
     new_scores = update_5d_scores(new_cross)
 
-    print('\n[4/6] 前瞻收益')
+    print('\n[4/7] 前瞻收益')
     update_forward_returns(new_cross)
 
-    print('\n[5/6] 市场卦')
+    print('\n[5/7] 天卦')
     update_market_bagua(new_cross, new_scores)
 
-    print('\n[6/6] 个股卦')
+    print('\n[6/7] 地卦')
     update_stock_bagua(new_cross, new_scores)
+
+    print('\n[7/7] 日/月/年卦 (分治底座)')
+    update_multi_scale_gua()
 
     elapsed = time.time() - t0
     print(f'\n{"=" * 60}')

@@ -15,10 +15,13 @@ venv*/
 # 数据文件（太大，不入库）
 *.csv
 *.pkl
+*.parquet
 data_layer/data/stocks/
 data_layer/data/_cache_*.pkl
 data_layer/data/*.csv
 data_layer/data/*.json
+data_layer/data/ablation/
+data_layer/data/payload_cache/
 
 # 日志
 logs/
@@ -39,6 +42,9 @@ logs/
 live/runtime/
 live/snapshots/
 live/logs/
+
+# 用户本地参考文档 (非项目代码)
+主力线战法（qmt）.txt
 
 # OS
 Thumbs.db

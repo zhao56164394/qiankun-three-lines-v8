@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-八卦分治回测 — 替换 crazy+normal 双模式
+八卦分治回测 — 日卦分治架构 (v8.3)
 
 核心逻辑:
-  每天看中证1000大象卦 → 查表获取该卦的策略参数(选股/买入/卖出)
-  不再有 crazy/normal 模式切换
+  分治变量: 市场日卦 d_gua (multi_scale_gua_daily.csv, v10 三爻带滞后带)
+           每天按 d_gua 查表获取该卦的策略参数(选股/买入/卖出)
+  相比老基线 (天卦 tian_gua 分治): 2014-2026 回测 -3.3% → +346.5%, MDD 66.9% → 52.4%
+  固化于 v8.3. 老基线 tian_gua 分支已移除 (见 git v8.2 历史).
 
 策略参数来源: optimize_8gua.py 寻优结果 + 人工调整(避免小样本过拟合)
 
@@ -12,6 +14,10 @@
   1. 优先选 N≥20 的方案
   2. 独立交易卦(坤/兑/离/艮/乾/震) → 各自按专项配置运行
   3. 艮/离 是盈利核心(占总信号80%+)，用稳健参数
+
+备注:
+  - 代码里变量名 tian_gua_map / 字段 tian_gua 保留 (历史命名, 内容为 d_gua)
+  - 个股层过滤仍用 地卦 (di_gua) + 人卦 (ren_gua), 这部分未改
 """
 import sys, os, io, json
 from collections import defaultdict
@@ -30,12 +36,22 @@ from backtest_capital import (
     YEAR_START, YEAR_END, INIT_CAPITAL, DATA_DIR,
     load_big_cycle_context, summarize_signal_context,
 )
-from data_layer.foundation_data import load_stock_bagua_map, load_market_bagua, load_daily_bagua
+from data_layer.foundation_data import load_stock_bagua_map, load_daily_bagua
 from data_layer.gua_data import clean_gua as _clean_gua, GUA_DISPLAY_NAMES as GUA_NAMES
 
 
 def _load_stock_main_force():
-    """从CSV直接读取每只股票的 main_force 列（load_stocks不含此列）"""
+    """从 stocks.parquet 读取 main_force 列（load_stocks 不含此列）。
+    Parquet 缺失时 fallback 到 5102 个 CSV 循环。"""
+    pq_path = os.path.join(DATA_DIR, 'stocks.parquet')
+    if os.path.exists(pq_path):
+        df = pd.read_parquet(pq_path, columns=['code', 'date', 'main_force'])
+        df['code'] = df['code'].astype(str).str.zfill(6)
+        df['date'] = pd.to_datetime(df['date'], format='mixed').dt.strftime('%Y-%m-%d')
+        mf_map = {code: dict(zip(g['date'].values, g['main_force'].values))
+                  for code, g in df.groupby('code', sort=False)}
+        return mf_map
+
     stock_dir = os.path.join(DATA_DIR, 'stocks')
     mf_map = {}
     for fname in os.listdir(stock_dir):
@@ -100,84 +116,21 @@ def build_gua_context_stats(trades):
 
 UNIFIED_POOL_THRESHOLD = -250  # 统一入池阈值(fallback)
 
-GUA_STRATEGY = {
-    '000': {'sell': 'kun_bear', 'active': True,
-            'pool_threshold': -250,
-            'pool_depth': None,
-            'pool_days_min': None, 'pool_days_max': None,
-            # 方案 α: 任何池深都接受, 但排除池天 4-10 (磨底死区)
-            # 八卦: 0-3天=极而复反, 11+天=物极必反; 4-10天=阴中无阳磨底, 必亏
-            'pool_depth_tiers': [
-                {'depth_max': None, 'days_min': 0, 'days_max': None, 'days_exclude': [4, 10]},
-            ],
-            'kun_buy': True,
-            'kun_exclude_ren_gua': {'000', '110'},
-            'kun_allow_di_gua': {'110'},
-            'kun_buy_mode': 'double_rise',
-            'kun_cross_threshold': 20,
-            },
-    '001': {'sell': 'bear', 'active': True,
-            'pool_threshold': -250, 'pool_depth': None,
-            'pool_days_min': None, 'pool_days_max': None,
-            'gen_buy': True,
-            'gen_allow_di_gua': {'000', '010'},
-            'gen_buy_mode': 'double_rise',
-            'gen_cross_threshold': 20,
-            },
-    '010': {'sell': 'bear', 'active': True,
-            'pool_threshold': -250, 'pool_depth': None,
-            'pool_days_min': None, 'pool_days_max': None,
-            },
-    '011': {'sell': 'bear', 'active': True,
-            'pool_threshold': -250, 'pool_depth': None,
-            'pool_days_min': None, 'pool_days_max': None,
-            'xun_buy': 'double_rise',
-            'xun_buy_param': 11,
-            'xun_allow_di_gua': {'010'},
-            },
-    '100': {'sell': 'bull', 'active': True,
-            'pool_threshold': -250, 'pool_depth': None,
-            'pool_days_min': 1, 'pool_days_max': 7,
-            'zhen_buy': True,
-            'zhen_buy_mode': 'double_rise',
-            'zhen_cross_threshold': 20,
-            'zhen_exclude_ren_gua': {'001', '011'},
-            'zhen_allow_di_gua': None,
-            },
-    '101': {'sell': 'bear', 'active': True,
-            'pool_threshold': -250, 'pool_depth': None,
-            'pool_days_min': None, 'pool_days_max': None,
-            'li_buy': True,
-            'li_buy_mode': 'double_rise',
-            'li_cross_threshold': 20,
-            'li_exclude_ren_gua': {'001'},
-            'li_allow_di_gua': {'000'},
-            },
-    '110': {'sell': 'dui_bear', 'active': True,
-            'pool_threshold': -250, 'pool_depth': None,
-            'pool_days_min': None, 'pool_days_max': None,
-            'dui_buy': True,
-            'dui_buy_mode': 'cross',
-            'dui_cross_threshold': 20,
-            'dui_allow_di_gua': {'000', '010', '110'},
-            'dui_exclude_ren_gua': {'110', '100'},
-            },
-    '111': {'sell': 'qian_bull', 'active': True,
-            'pool_threshold': -250, 'pool_depth': None,
-            'pool_days_min': None, 'pool_days_max': None,
-            'qian_buy': True,
-            'qian_cross_threshold': 60,
-            'qian_exclude_ren_gua': set(),
-            'qian_exclude_di_gua': {'101', '111'},
-            },
-}
+# 策略 cfg 从 strategy_configs.py 加载, 通过 env STRATEGY_VERSION 切换 (默认 test1)
+# 历史: 之前 GUA_STRATEGY 直接定义在此文件, 2026-04-26 抽离便于版本并存
+from strategy_configs import get_strategy as _get_strategy
+GUA_STRATEGY = _get_strategy()
 
 
 # ============================================================
 # 信号扫描 — 按卦分卖法
 # ============================================================
-def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cycle_context=None, stock_bagua_map=None, daily_bagua_map=None):
-    """扫描买入信号，按天卦(市场卦)确定卖法和过滤参数"""
+def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cycle_context=None, stock_bagua_map=None, daily_bagua_map=None, gate_map=None):
+    """扫描买入信号, 按市场日卦 (d_gua) 确定卖法和过滤参数
+    参数 tian_gua_map 是历史命名, 实际传入的是 d_gua 的映射表.
+    gate_map: dict[date_str -> (m_gua, y_gua)], 月/年卦激活开关数据源.
+              按 GUA_STRATEGY[d_gua] 的 gate_disable_y_gua / gate_disable_m_gua 决定关火.
+    """
 
     def _pool_days_ok(strat, idx, start_idx):
         pd_min = strat.get('pool_days_min')
@@ -257,7 +210,8 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                      'xun_gua': 0,
                      'zhen_gua': 0, 'zhen_ren_gua': 0, 'zhen_pool_days': 0, 'pool_days': 0,
                      'li_gua': 0, 'li_ren_gua': 0,
-                     'kun_gua': 0, 'kun_ren_gua': 0}
+                     'kun_gua': 0, 'kun_ren_gua': 0,
+                     'gate_y_gua': 0, 'gate_m_gua': 0}
 
     for code, df in stock_data.items():
         if len(df) < 35:
@@ -268,6 +222,11 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
         closes = df['close'].values
         opens = df['open'].values
 
+        # 外提: code 在内循环里不变, 预先 zfill (~10M 次 zfill -> 1 次)
+        code_str = str(code).zfill(6)
+        # 预先把 dates 转 list-of-str (避免每次内循环 str(dates[i]))
+        dates_str = dates.astype(str).tolist() if hasattr(dates, 'astype') else [str(d) for d in dates]
+
         mf_dict = stk_mf_map.get(code, {}) if stk_mf_map else {}
 
         # === 共享池状态(8卦共用) ===
@@ -275,22 +234,27 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
         pool_start_idx = None
 
         for i in range(1, len(df)):
-            dt_str = str(dates[i])
-            stock_ctx = stock_bagua_map.get((dt_str, str(code).zfill(6)), {}) if stock_bagua_map else {}
+            dt_str = dates_str[i]
+            stock_ctx = stock_bagua_map.get((dt_str, code_str), {}) if stock_bagua_map else {}
             di_gua = _clean_gua(stock_ctx.get('di_gua', ''))
             if di_gua == '???':
                 continue
             di_gua_name = stock_ctx.get('di_gua_name', '')
-            tian_info = tian_gua_map.get(dt_str, ('???', ''))
-            tian_gua = tian_info[0] if isinstance(tian_info, tuple) else tian_info
-            tian_gua_name = tian_info[1] if isinstance(tian_info, tuple) else ''
-            ren_gua_ctx = daily_bagua_map.get((dt_str, str(code).zfill(6)), {}) if daily_bagua_map else {}
+            tian_info = tian_gua_map.get(dt_str)
+            if tian_info is None:
+                tian_gua, tian_gua_name = '???', ''
+            elif isinstance(tian_info, tuple):
+                tian_gua, tian_gua_name = tian_info[0], tian_info[1]
+            else:
+                tian_gua, tian_gua_name = tian_info, ''
+            ren_gua_ctx = daily_bagua_map.get((dt_str, code_str), {}) if daily_bagua_map else {}
             ren_gua = _clean_gua(ren_gua_ctx.get('gua_code', ''))
             ren_gua_name = ren_gua_ctx.get('gua_name', '')
             context = big_cycle_context.get(dt_str, {}) if big_cycle_context else {}
 
             # ============================================================
             # 共享池: 入池 → 各卦分支的 pool_depth 做二次验证
+            # 入池阈值全局统一 (UNIFIED_POOL_THRESHOLD = -250)
             # ============================================================
             if not pooled:
                 if not np.isnan(retail[i]) and retail[i] < UNIFIED_POOL_THRESHOLD:
@@ -305,6 +269,32 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
             # 未入池则跳过信号检测
             if not pooled:
                 continue
+
+            # ============================================================
+            # Gate: 年/月卦激活开关 (按 d_gua 分支独立配置)
+            # 三层粒度 (按从粗到细顺序检查):
+            #   gate_disable_y_gua: 关掉整年 (set of y_gua) — 粗粒度, 最简
+            #   gate_disable_m_gua: 关掉整月 (set of m_gua) — 中粒度
+            #   gate_disable_ym:    关掉 (y_gua, m_gua) 联合 cell — 精细粒度
+            # 仅控制信号触发, 不影响入池
+            # ============================================================
+            if gate_map is not None and tian_gua in GUA_STRATEGY:
+                _strat_gate = GUA_STRATEGY[tian_gua]
+                _gate_y = _strat_gate.get('gate_disable_y_gua') or ()
+                _gate_m = _strat_gate.get('gate_disable_m_gua') or ()
+                _gate_ym = _strat_gate.get('gate_disable_ym') or ()
+                if _gate_y or _gate_m or _gate_ym:
+                    _today_m, _today_y = gate_map.get(dt_str, ('???', '???'))
+                    if _gate_y and _today_y in _gate_y:
+                        filter_stats['gate_y_gua'] += 1
+                        continue
+                    if _gate_m and _today_m in _gate_m:
+                        filter_stats['gate_m_gua'] += 1
+                        continue
+                    if _gate_ym and (_today_y, _today_m) in _gate_ym:
+                        filter_stats.setdefault('gate_ym', 0)
+                        filter_stats['gate_ym'] += 1
+                        continue
 
             # ============================================================
             # 乾卦: 上穿阈值信号 — 满足条件即出池
@@ -866,19 +856,22 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
     capital = init_capital or INIT_CAPITAL
     zz_indexed = zz_df.set_index('date')
 
-    # 天卦映射：优先外部传入，否则从信号中提取
+    # 分治卦映射 (市场日卦 d_gua)：优先外部传入，否则从信号中提取
     if tian_gua_map_ext:
         tian_gua_map = {}
         for k, v in tian_gua_map_ext.items():
             tian_gua_map[k] = v[0] if isinstance(v, tuple) else v
     else:
-        tian_gua_map = {}
-        for _, row in zz_df.iterrows():
-            tian_gua_map[row['date']] = _clean_gua(row['gua'])
+        # 向量化避免 iterrows
+        _dates = zz_df['date'].astype(str).values
+        _guas = zz_df['gua'].astype(str).map(_clean_gua).values
+        tian_gua_map = {_dates[i]: _guas[i] for i in range(len(zz_df))}
 
+    # 把 sig_df 转为 records (dict) 而非 Series, 下游访问比 row['col'] 快 ~10x
     sig_by_date = {}
-    for _, row in sig_df.iterrows():
-        sig_by_date.setdefault(row['signal_date'], []).append(row)
+    sig_records = sig_df.to_dict('records')
+    for r in sig_records:
+        sig_by_date.setdefault(r['signal_date'], []).append(r)
 
     all_dates = sorted(set(
         sig_df['signal_date'].tolist() + sig_df['sell_date'].tolist()))
@@ -1087,31 +1080,51 @@ def run(start_date=None, end_date=None, init_capital=None):
     stk_mf_map = _load_stock_main_force()
     print(f"  已加载 {len(stk_mf_map)} 只股票的main_force")
 
-    # 构建天卦映射(市场卦 → 分治维度)
-    market_bagua_df = load_market_bagua()
-    tian_gua_map = {}
-    for _, row in market_bagua_df.iterrows():
-        tian_gua_map[str(row['date'])] = (_clean_gua(row['gua_code']), row.get('gua_name', ''))
-    print(f"  天卦(市场卦)映射: {len(tian_gua_map)} 天")
+    # 构建分治卦映射: 市场日卦 d_gua (v10 三爻带滞后带)
+    # 注: 变量名 tian_gua_map 是历史命名, 实际内容为 d_gua
+    # 同时构建 gate_map: 月卦/年卦激活开关用 (按分支独立配置, 高位年/坏月份关火)
+    ms_pq = os.path.join(DATA_DIR, 'foundation', 'multi_scale_gua_daily.parquet')
+    ms_csv = os.path.join(DATA_DIR, 'foundation', 'multi_scale_gua_daily.csv')
+    if os.path.exists(ms_pq):
+        ms_df = pd.read_parquet(ms_pq)
+    else:
+        ms_df = pd.read_csv(ms_csv, encoding='utf-8-sig',
+                            dtype={'d_gua': str, 'm_gua': str, 'y_gua': str})
+    ms_df['date'] = pd.to_datetime(ms_df['date']).dt.strftime('%Y-%m-%d')
 
-    # 构建人卦映射(主卦/个股横截面排名)
+    # 向量化构造 tian_gua_map / gate_map（替代 iterrows）
+    dates_arr = ms_df['date'].astype(str).values
+    d_arr = ms_df['d_gua'].astype(str).map(_clean_gua).values
+    m_arr = ms_df['m_gua'].astype(str).map(_clean_gua).values
+    y_arr = ms_df['y_gua'].astype(str).map(_clean_gua).values
+    tian_gua_map = {dates_arr[i]: (d_arr[i], GUA_NAMES.get(d_arr[i], ''))
+                    for i in range(len(ms_df)) if d_arr[i] and d_arr[i] != '???'}
+    gate_map = {dates_arr[i]: (m_arr[i], y_arr[i]) for i in range(len(ms_df))}
+    print(f"  分治卦 (市场日卦 d_gua, v10): {len(tian_gua_map)} 天")
+    print(f"  激活开关映射 (m_gua/y_gua): {len(gate_map)} 天")
+
+    # 构建人卦映射(主卦/个股横截面排名) - 向量化构造避免 7.7M 次 iterrows
     daily_bagua_df = load_daily_bagua()
-    daily_bagua_map = {}
-    for _, row in daily_bagua_df.iterrows():
-        daily_bagua_map[(str(row['date']), str(row['code']).zfill(6))] = {
-            'gua_code': str(row['gua_code']).zfill(3),
-            'gua_name': row.get('gua_name', ''),
-        }
+    if 'gua_name' not in daily_bagua_df.columns:
+        daily_bagua_df['gua_name'] = ''
+    _dates = daily_bagua_df['date'].astype(str).values
+    _codes = daily_bagua_df['code'].astype(str).str.zfill(6).values
+    _guas = daily_bagua_df['gua_code'].astype(str).str.zfill(3).values
+    _names = daily_bagua_df['gua_name'].fillna('').astype(str).values
+    daily_bagua_map = {
+        (_dates[i], _codes[i]): {'gua_code': _guas[i], 'gua_name': _names[i]}
+        for i in range(len(daily_bagua_df))
+    }
 
     # 2. 扫描信号
     print("\n[2] 扫描八卦分治信号...")
-    sig = scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map, big_cycle_context=big_cycle_context, stock_bagua_map=stock_bagua_map, daily_bagua_map=daily_bagua_map)
+    sig = scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map, big_cycle_context=big_cycle_context, stock_bagua_map=stock_bagua_map, daily_bagua_map=daily_bagua_map, gate_map=gate_map)
     sig = sig[(sig['signal_date'] >= year_start) &
               (sig['signal_date'] < year_end)].reset_index(drop=True)
 
     print(f"  总信号: {len(sig)}, 非skip: {(~sig['is_skip']).sum()}")
     signal_context = summarize_signal_context(sig)
-    print(f"  天卦 tian 分布: {signal_context.get('tian_gua_counts', {})}")
+    print(f"  分治卦 (d_gua) 分布: {signal_context.get('tian_gua_counts', {})}")
 
     # 分卦信号统计
     print(f"\n  分卦信号分布:")
@@ -1122,7 +1135,14 @@ def run(start_date=None, end_date=None, init_capital=None):
 
     # 3. 模拟
     print("\n[3] 八卦分治模拟...")
-    result = simulate_8gua(sig, zz_df, max_pos=5, daily_limit=1,
+    # max_pos / daily_limit 从 strategy_configs 按版本读取, env 仍可临时覆盖
+    from strategy_configs import get_sim_params, get_version
+    _sim = get_sim_params()
+    _max_pos = int(os.environ.get('SIM_MAX_POS', _sim['max_pos']))
+    _daily_limit = int(os.environ.get('SIM_DAILY_LIMIT', _sim['daily_limit']))
+    _ver = get_version()
+    print(f"  [strategy={_ver}] max_pos={_max_pos}, daily_limit={_daily_limit}")
+    result = simulate_8gua(sig, zz_df, max_pos=_max_pos, daily_limit=_daily_limit,
                            init_capital=capital, tian_gua_map_ext=tian_gua_map)
     stats = calc_stats(result, '八卦分治')
     trades = result['trade_log']

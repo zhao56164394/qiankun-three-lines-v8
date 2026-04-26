@@ -959,16 +959,6 @@ def _build_test_debug_matrix(target_gua, dataset_signature=None, buy_case=None, 
     }
 
 
-def _baseline_params_match_snapshot(target_gua, buy_case, pool_threshold, sell, pool_days_min, pool_days_max, pool_depth=None):
-    target_gua = str(target_gua).zfill(3)
-    if target_gua not in eg.GUA_EXPERIMENT_SPECS:
-        return True
-    runtime_cfg = _get_test_runtime_cfg(target_gua, buy_case=buy_case, pool_threshold=pool_threshold, sell=sell, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth)
-    naked_cfg = copy.deepcopy(eg.get_spec(target_gua)['naked_cfg'])
-    # naked_cfg 已包含 tiers, runtime_cfg 从 naked_cfg 派生, tiers 天然一致, 不需特殊 strip
-    return eg.make_cfg_key(target_gua, runtime_cfg) == eg.make_cfg_key(target_gua, naked_cfg)
-
-
 
 @st.cache_data(ttl=None)
 def build_bagua_debug_matrix_for_dataset(target_gua, dataset_key='formal', test_buy_case=None, test_pool_threshold=None, test_sell=None, tier1_threshold=None, tier2_threshold=None, pool_days_min=None, pool_days_max=None, pool_depth=None, start_date=None, end_date=None, data_version=''):
@@ -977,12 +967,9 @@ def build_bagua_debug_matrix_for_dataset(target_gua, dataset_key='formal', test_
     if dataset_key == 'formal':
         payload = build_bagua_debug_matrix(target_gua, source='8gua', use_experiment_baseline=False, data_version=data_version)
     elif dataset_key == 'baseline':
-        target_gua_str = str(target_gua).zfill(3)
-        if target_gua_str in eg.GUA_EXPERIMENT_SPECS and not _baseline_params_match_snapshot(target_gua_str, test_buy_case, test_pool_threshold, test_sell, pool_days_min, pool_days_max, pool_depth):
-            sig = _get_test_dataset_signature(target_gua, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1=None, tier2=None, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth)
-            payload = _build_test_debug_matrix(target_gua, dataset_signature=sig, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1_threshold=None, tier2_threshold=None, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth, data_version=data_version)
-        else:
-            payload = _build_baseline_debug_matrix(target_gua, data_version=data_version)
+        # v3 综合裸跑语义: 始终读 snapshot (来自 backtest_8gua_naked.py 综合回测分组).
+        # 不再支持 UI 参数临时覆盖后走单卦独立跑 — 那是 test 数据集的职责.
+        payload = _build_baseline_debug_matrix(target_gua, data_version=data_version)
     else:
         if str(target_gua).zfill(3) in eg.GUA_EXPERIMENT_SPECS:
             sig = _get_test_dataset_signature(target_gua, buy_case=test_buy_case, pool_threshold=test_pool_threshold, sell=test_sell, tier1=tier1_threshold, tier2=tier2_threshold, pool_days_min=pool_days_min, pool_days_max=pool_days_max, pool_depth=pool_depth)
@@ -1118,22 +1105,29 @@ def compute_bagua_dashboard_summary(all_payloads):
     meta_candidates = [payload.get('meta') for payload in all_payloads.values() if isinstance(payload.get('meta'), dict)]
 
     if dataset_key == 'baseline':
-        baseline_meta = next(
-            (
-                item for item in meta_candidates
-                if item.get('init_capital') is not None and item.get('trade_count') is None
-            ),
+        # v3 架构: snapshot 每卦 meta 含真实综合回测 final_capital/total_return, 直接读
+        unified_meta = next(
+            (item for item in meta_candidates if item.get('final_capital') is not None),
             None,
         )
-        if baseline_meta is None:
-            baseline_meta = next((item for item in meta_candidates if item.get('init_capital') is not None), None)
-        init_capital = float((baseline_meta or {}).get('init_capital', 0.0) or 0.0)
-        if init_capital > 0:
-            meta_final_capital = init_capital + total_profit
-            meta_total_return = (meta_final_capital / init_capital - 1) * 100
-        elif baseline_meta is not None:
-            meta_final_capital = float(baseline_meta.get('final_capital', 0.0) or 0.0)
-            meta_total_return = float(baseline_meta.get('total_return', 0.0) or 0.0)
+        if unified_meta is not None:
+            meta_final_capital = float(unified_meta.get('final_capital', 0.0) or 0.0)
+            meta_total_return = float(unified_meta.get('total_return', 0.0) or 0.0)
+        else:
+            # v2 兼容: per-gua 独立跑 (老 snapshot), 每卦有 init_capital, 累加近似
+            baseline_meta = next(
+                (
+                    item for item in meta_candidates
+                    if item.get('init_capital') is not None and item.get('trade_count') is None
+                ),
+                None,
+            )
+            if baseline_meta is None:
+                baseline_meta = next((item for item in meta_candidates if item.get('init_capital') is not None), None)
+            init_capital = float((baseline_meta or {}).get('init_capital', 0.0) or 0.0)
+            if init_capital > 0:
+                meta_final_capital = init_capital + total_profit
+                meta_total_return = (meta_final_capital / init_capital - 1) * 100
     else:
         meta = max(meta_candidates, key=lambda item: float(item.get('final_capital', 0.0)), default=None)
         if meta_candidates:

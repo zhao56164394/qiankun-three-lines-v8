@@ -29,7 +29,19 @@ from bagua_engine import calc_xiang_gua
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 ZZ1000_PATH = os.path.join(DATA_DIR, 'zz1000_daily.csv')
+ZZ1000_PARQUET_PATH = os.path.join(DATA_DIR, 'zz1000_daily.parquet')
 STOCKS_DIR = os.path.join(DATA_DIR, 'stocks')
+STOCKS_PARQUET_PATH = os.path.join(DATA_DIR, 'stocks.parquet')
+
+
+def _save_csv_and_parquet(df, csv_path, parquet_path):
+    """双写 CSV + Parquet（迁移期双轨支持）。"""
+    df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+    try:
+        df.to_parquet(parquet_path, engine='pyarrow', compression='snappy', index=False)
+    except Exception as e:
+        print(f'  ⚠ Parquet 写入失败 ({os.path.basename(parquet_path)}): {e}')
+
 
 INDEX_ZIP = 'E:/BaiduSyncdisk/A股数据_zip/指数/指数_日_kline.zip'
 STOCK_ZIP = 'E:/BaiduSyncdisk/A股数据_zip/daily_qfq.zip'
@@ -253,7 +265,7 @@ def update_zz1000():
             combined = recalc_tail_indicators(
                 combined, col_close='close', col_high='high', col_low='low',
                 n_tail=n_csv + 5)
-            combined.to_csv(ZZ1000_PATH, index=False, encoding='utf-8-sig')
+            _save_csv_and_parquet(combined, ZZ1000_PATH, ZZ1000_PARQUET_PATH)
             print(f'  已保存, 范围: {combined["date"].iloc[0]} ~ {combined["date"].iloc[-1]}')
         else:
             print(f'  无新增数据')
@@ -299,7 +311,7 @@ def update_zz1000():
             n_tail=n_csv + 5)
 
     # 保存
-    combined.to_csv(ZZ1000_PATH, index=False, encoding='utf-8-sig')
+    _save_csv_and_parquet(combined, ZZ1000_PATH, ZZ1000_PARQUET_PATH)
     print(f'  已保存: {ZZ1000_PATH}')
     print(f'  数据范围: {combined["date"].iloc[0]} ~ {combined["date"].iloc[-1]} ({len(combined)}行)')
     return True
@@ -458,7 +470,37 @@ def update_all_stocks():
 
     print(f'\n  完成! 更新{success}只, 失败{fail}只')
 
+    if success > 0:
+        rebuild_stocks_parquet()
+
     return success, fail
+
+
+def rebuild_stocks_parquet():
+    """把 stocks/ 下所有 CSV 合并成单一 stocks.parquet。
+    在每日更新完个股 CSV 后调用，保持 Parquet 与 CSV 同步。"""
+    print('\n  重建 stocks.parquet ...')
+    csv_files = sorted(glob.glob(os.path.join(STOCKS_DIR, '*.csv')))
+    if not csv_files:
+        print('  !! stocks 目录为空, 跳过')
+        return
+    parts = []
+    for fpath in csv_files:
+        code = os.path.splitext(os.path.basename(fpath))[0]
+        df = pd.read_csv(fpath, encoding='utf-8-sig', low_memory=False)
+        df.insert(0, 'code', code)
+        parts.append(df)
+    full = pd.concat(parts, ignore_index=True)
+    del parts
+    full['code'] = full['code'].astype('string').str.zfill(6)
+    if 'gua' in full.columns:
+        full['gua'] = full['gua'].astype('string')
+    if 'date' in full.columns:
+        full['date'] = full['date'].astype('string')
+    full = full.sort_values(['code', 'date']).reset_index(drop=True)
+    full.to_parquet(STOCKS_PARQUET_PATH, engine='pyarrow', compression='snappy', index=False)
+    pq_size = os.path.getsize(STOCKS_PARQUET_PATH) / 1024 / 1024
+    print(f'  OK stocks.parquet: {len(full):,} 行, {pq_size:.0f} MB')
 
 
 def _clear_pkl_cache(pattern='*'):

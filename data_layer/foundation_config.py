@@ -168,6 +168,16 @@ def foundation_file(name: str) -> str:
     return os.path.join(FOUNDATION_DATA_DIR, name)
 
 
+def foundation_parquet(csv_name: str) -> str:
+    """对应 csv_name 的 Parquet 路径（同名换扩展名）。"""
+    ensure_foundation_data_dir()
+    base, _ = os.path.splitext(csv_name)
+    return os.path.join(FOUNDATION_DATA_DIR, base + '.parquet')
+
+
+STOCKS_PARQUET = os.path.join(DATA_LAYER_ROOT, 'data', 'stocks.parquet')
+ZZ1000_PARQUET = os.path.join(DATA_LAYER_ROOT, 'data', 'zz1000_daily.parquet')
+
 
 def path_exists_map() -> Dict[str, bool]:
     return {k: os.path.exists(v) for k, v in PATHS.items()}

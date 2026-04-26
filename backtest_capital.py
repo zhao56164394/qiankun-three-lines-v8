@@ -103,11 +103,28 @@ def _fmt_gua(val):
     return s.zfill(3) if s else ''
 
 
-def _build_zz1000():
-    path = os.path.join(DATA_DIR, 'zz1000_daily.csv')
-    df = pd.read_csv(path, encoding='utf-8-sig')
-    # 统一日期格式
+def _read_zz1000_df():
+    """读 zz1000：Parquet 优先，CSV 兜底。"""
+    pq_path = os.path.join(DATA_DIR, 'zz1000_daily.parquet')
+    csv_path = os.path.join(DATA_DIR, 'zz1000_daily.csv')
+    if os.path.exists(pq_path):
+        df = pd.read_parquet(pq_path)
+    else:
+        df = pd.read_csv(csv_path, encoding='utf-8-sig')
     df['date'] = pd.to_datetime(df['date'], format='mixed').dt.strftime('%Y-%m-%d')
+    return df
+
+
+def _zz1000_source_files():
+    """zz1000 缓存依赖的源文件（任一存在即可）。"""
+    return [
+        os.path.join(DATA_DIR, 'zz1000_daily.parquet'),
+        os.path.join(DATA_DIR, 'zz1000_daily.csv'),
+    ]
+
+
+def _build_zz1000():
+    df = _read_zz1000_df()
     n = len(df)
     trend = df['trend'].values.astype(float)
     zz = {}
@@ -124,15 +141,11 @@ def _build_zz1000():
 
 def load_zz1000():
     """加载中证1000（6字段dict, 用于卦象编码）"""
-    src = os.path.join(DATA_DIR, 'zz1000_daily.csv')
-    return _load_cached('zz1000', [src], _build_zz1000)
+    return _load_cached('zz1000', _zz1000_source_files(), _build_zz1000)
 
 
 def _build_zz1000_full():
-    path = os.path.join(DATA_DIR, 'zz1000_daily.csv')
-    df = pd.read_csv(path, encoding='utf-8-sig')
-    # 统一日期格式
-    df['date'] = pd.to_datetime(df['date'], format='mixed').dt.strftime('%Y-%m-%d')
+    df = _read_zz1000_df()
     df['gua'] = df['gua'].astype(str).str.zfill(3)
     df['trend_ma10'] = df['trend'].rolling(10).mean()
     return df
@@ -140,11 +153,21 @@ def _build_zz1000_full():
 
 def load_zz1000_full():
     """加载中证1000全部字段（DataFrame, 用于疯狂模式触发判断）"""
-    src = os.path.join(DATA_DIR, 'zz1000_daily.csv')
-    return _load_cached('zz1000_full', [src], _build_zz1000_full)
+    return _load_cached('zz1000_full', _zz1000_source_files(), _build_zz1000_full)
 
 
 def _build_stocks():
+    """优先用 stocks.parquet 单文件加载；缺失则 fallback 到 5102 个 CSV 循环。"""
+    pq_path = os.path.join(DATA_DIR, 'stocks.parquet')
+    if os.path.exists(pq_path):
+        cols = ['code', 'date', 'open', 'close', 'trend', 'retail', 'gua']
+        df = pd.read_parquet(pq_path, columns=cols)
+        df['code'] = df['code'].astype(str).str.zfill(6)
+        df['date'] = pd.to_datetime(df['date'], format='mixed').dt.strftime('%Y-%m-%d')
+        stock_data = {code: g.drop(columns='code').reset_index(drop=True)
+                      for code, g in df.groupby('code', sort=False)}
+        return stock_data
+
     stock_dir = os.path.join(DATA_DIR, 'stocks')
     stock_data = {}
     for fname in os.listdir(stock_dir):
@@ -156,7 +179,6 @@ def _build_stocks():
             df = pd.read_csv(fpath, encoding='utf-8-sig',
                              usecols=['date', 'open', 'close', 'trend', 'retail',
                                       'gua'])
-            # 统一日期格式为 YYYY-MM-DD (兼容 YYYYMMDD 和 YYYY-MM-DD 混合)
             df['date'] = pd.to_datetime(df['date'], format='mixed').dt.strftime('%Y-%m-%d')
             stock_data[code] = df
         except:
@@ -165,18 +187,24 @@ def _build_stocks():
 
 
 def load_stocks():
-    """加载个股数据"""
+    """加载个股数据：优先用 stocks.parquet 的 mtime，否则抽样检查 stocks/ 目录。"""
+    pq_path = os.path.join(DATA_DIR, 'stocks.parquet')
     stock_dir = os.path.join(DATA_DIR, 'stocks')
     pkl = _cache_path('stocks')
-    # stocks目录特殊处理：检查目录下任一文件是否比pkl新
+
     if os.path.exists(pkl):
         pkl_mtime = os.path.getmtime(pkl)
-        # 抽样检查前10个文件的mtime，有任何一个比pkl新就重建
-        csvs = [os.path.join(stock_dir, f) for f in os.listdir(stock_dir)[:10]
-                if f.endswith('.csv')]
-        if csvs and all(os.path.getmtime(f) < pkl_mtime for f in csvs):
-            with open(pkl, 'rb') as f:
-                return pickle.load(f)
+        if os.path.exists(pq_path):
+            if os.path.getmtime(pq_path) < pkl_mtime:
+                with open(pkl, 'rb') as f:
+                    return pickle.load(f)
+        elif os.path.exists(stock_dir):
+            csvs = [os.path.join(stock_dir, f) for f in os.listdir(stock_dir)[:10]
+                    if f.endswith('.csv')]
+            if csvs and all(os.path.getmtime(f) < pkl_mtime for f in csvs):
+                with open(pkl, 'rb') as f:
+                    return pickle.load(f)
+
     data = _build_stocks()
     with open(pkl, 'wb') as f:
         pickle.dump(data, f, protocol=5)
@@ -184,16 +212,18 @@ def load_stocks():
 
 
 def _build_stock_events():
-    path = os.path.join(DATA_DIR, 'stock_seg_events.csv')
-    df = pd.read_csv(path, encoding='utf-8-sig')
+    pq_path = os.path.join(DATA_DIR, 'stock_seg_events.parquet')
+    csv_path = os.path.join(DATA_DIR, 'stock_seg_events.csv')
+    if os.path.exists(pq_path):
+        df = pd.read_parquet(pq_path)
+    else:
+        df = pd.read_csv(csv_path, encoding='utf-8-sig')
     df['event_date'] = df['event_date'].astype(str)
     df['avail_date'] = df['avail_date'].astype(str)
-    # 兼容新旧格式 + 处理浮点数gua值
     if 'gua' in df.columns:
         df['gua'] = df['gua'].astype(str).str.split('.').str[0].str.zfill(3)
     elif 'year_gua' in df.columns:
         df['gua'] = df['year_gua'].astype(str).str.split('.').str[0].str.zfill(3)
-    # zz_gua 列 → tian_gua
     if 'zz_gua' in df.columns:
         df['zz_gua'] = df['zz_gua'].astype(str).str.split('.').str[0].str.zfill(3)
         df.rename(columns={'zz_gua': 'tian_gua'}, inplace=True)
@@ -202,8 +232,10 @@ def _build_stock_events():
 
 def load_stock_events():
     """加载个股段首事件表"""
-    src = os.path.join(DATA_DIR, 'stock_seg_events.csv')
-    return _load_cached('stock_events', [src], _build_stock_events)
+    return _load_cached('stock_events', [
+        os.path.join(DATA_DIR, 'stock_seg_events.parquet'),
+        os.path.join(DATA_DIR, 'stock_seg_events.csv'),
+    ], _build_stock_events)
 
 
 # ============================================================

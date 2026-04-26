@@ -36,11 +36,12 @@ PAYLOAD_DISK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__))
 _DATA_VERSION_PATHS = [
     # 只放"原始数据源"；snapshot / payload pkl 都是派生产物，mtime 变化只表示重新生成
     # 但内容不变 → 不应该让下游缓存失效
-    ('data_layer', 'data', 'zz1000_daily.csv'),
-    ('data_layer', 'data', 'foundation', 'market_bagua_daily.csv'),
-    ('data_layer', 'data', 'foundation', 'stock_bagua_daily.csv'),
-    ('data_layer', 'data', 'foundation', 'daily_bagua_sequence.csv'),
-    ('data_layer', 'data', 'foundation', 'daily_5d_scores.csv'),
+    # Parquet 优先（已迁移），CSV 兜底；同名文件取最新 mtime
+    ('data_layer', 'data', 'zz1000_daily'),
+    ('data_layer', 'data', 'foundation', 'market_bagua_daily'),
+    ('data_layer', 'data', 'foundation', 'stock_bagua_daily'),
+    ('data_layer', 'data', 'foundation', 'daily_bagua_sequence'),
+    ('data_layer', 'data', 'foundation', 'daily_5d_scores'),
 ]
 
 
@@ -54,9 +55,13 @@ def _data_version_stamp() -> str:
     root = os.path.dirname(os.path.abspath(__file__))
     mtimes = []
     for parts in _DATA_VERSION_PATHS:
-        full = os.path.join(root, *parts)
-        if os.path.exists(full):
-            mtimes.append(int(os.path.getmtime(full)))
+        base = os.path.join(root, *parts)
+        # Parquet 优先, CSV 兜底
+        for ext in ('.parquet', '.csv'):
+            full = base + ext
+            if os.path.exists(full):
+                mtimes.append(int(os.path.getmtime(full)))
+                break
     _cached_data_version = str(max(mtimes)) if mtimes else '0'
     return _cached_data_version
 
@@ -276,12 +281,15 @@ GUA_EXPERIMENT_SPECS: Dict[str, Dict[str, Any]] = {
 }
 
 
-# naked_cfg 派生规则: 从 b8.GUA_STRATEGY[gua] 复制策略参数，
-# 剥离所有市场/个股过滤白名单与池底二次验证，卖法统一为 'bear'（乾除外用 qian_bull）
+# naked_cfg 派生规则: 从 b8.GUA_STRATEGY[gua] 复制策略参数,
+# 剥离所有过滤 — 白名单 / 黑名单 / 池深二次验证 / 池深分档 / 池天限制; 卖法统一 'bear'.
+# 保留: pool_threshold (入池门), 触发模式 (cross/double_rise 及阈值), 分治架构本身.
 _NAKED_STRIP_FIELDS = {
     # 清空为空集 (过滤关闭)
     '000': {'kun_exclude_ren_gua': set(), 'kun_allow_di_gua': None},
-    '001': {'gen_allow_di_gua': None},
+    # 注: '001' 的 gen_allow_di_gua={'000','010'} ablation 验证独立有益 +250万,
+    #     视为分治结构性约束, 不剥离 (与 pool_depth_tiers / gate_* 同位)
+    '001': {},
     '010': {},
     '011': {'xun_allow_di_gua': None},
     '100': {'zhen_exclude_ren_gua': set(), 'zhen_allow_di_gua': None},
@@ -299,10 +307,17 @@ def derive_naked_cfg(gua: str) -> Dict[str, Any]:
 
     规则:
       1. 复制策略参数 (pool_threshold, 各买入模式/阈值, 独立分支标记等)
-      2. 将所有过滤白名单清空 (allow 类 → None, exclude 类 → set())
-      3. pool_depth 置 None (裸跑不走二次验证)
+      2. 清空所有过滤白/黑名单 (allow 类 → None, exclude 类 → set())
+      3. pool_depth = None (关闭池深数值二次验证)
       4. sell 统一为 'bear'
       5. active=True (强制启用)
+
+    保留 (视为分治架构的"结构性门控", 非"过滤"):
+      - pool_depth_tiers  (000 坤的磨底死区 4-10 天排除, 删后坤卦少赚 107w)
+      - pool_days_min/max (100 震的池天 1-7 窗口, 删后震卦转亏 93w)
+      - 触发模式 (cross/double_rise 及阈值)
+      - pool_threshold (入池门)
+      - gate_disable_y_gua / gate_disable_m_gua (年/月卦激活开关, 分治架构层)
     """
     if gua not in b8.GUA_STRATEGY:
         raise ValueError(f'未知卦 {gua}')
@@ -310,8 +325,6 @@ def derive_naked_cfg(gua: str) -> Dict[str, Any]:
     for k, v in _NAKED_STRIP_FIELDS.get(gua, {}).items():
         base[k] = copy.deepcopy(v) if isinstance(v, (set, dict, list)) else v
     base['pool_depth'] = None
-    # pool_depth_tiers 保留: 当 GUA_STRATEGY 配了 tiers, 视为"固化的裸跑基准";
-    # 没配 tiers 的卦, base 里就不会有这个 key, 行为等同原始裸跑。
     base['sell'] = _NAKED_SELL.get(gua, 'bear')
     base['active'] = True
     return base
