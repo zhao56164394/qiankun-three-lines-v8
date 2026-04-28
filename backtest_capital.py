@@ -156,14 +156,30 @@ def load_zz1000_full():
     return _load_cached('zz1000_full', _zz1000_source_files(), _build_zz1000_full)
 
 
+def _load_main_board_codes():
+    """加载主板代码集合 (含 ST). 仅排创业板/科创板/北交所. 表缺失返回 None 不过滤."""
+    uni_path = os.path.join(DATA_DIR, 'foundation', 'main_board_universe.parquet')
+    if not os.path.exists(uni_path):
+        return None
+    uni = pd.read_parquet(uni_path, columns=['code', 'board'])
+    uni['code'] = uni['code'].astype(str).str.zfill(6)
+    return set(uni[uni['board'] == '主板']['code'].unique())
+
+
 def _build_stocks():
-    """优先用 stocks.parquet 单文件加载；缺失则 fallback 到 5102 个 CSV 循环。"""
+    """优先用 stocks.parquet 单文件加载；缺失则 fallback 到 5102 个 CSV 循环。
+    应用 universe 过滤: 仅保留主板 (含 ST), 排除创业板/科创板/北交所。"""
+    main_codes = _load_main_board_codes()
     pq_path = os.path.join(DATA_DIR, 'stocks.parquet')
     if os.path.exists(pq_path):
         cols = ['code', 'date', 'open', 'close', 'trend', 'retail', 'gua']
         df = pd.read_parquet(pq_path, columns=cols)
         df['code'] = df['code'].astype(str).str.zfill(6)
         df['date'] = pd.to_datetime(df['date'], format='mixed').dt.strftime('%Y-%m-%d')
+        if main_codes is not None:
+            before = df['code'].nunique()
+            df = df[df['code'].isin(main_codes)]
+            print(f'[universe] 主板过滤: {before} -> {df["code"].nunique()} 只 (含 ST)')
         stock_data = {code: g.drop(columns='code').reset_index(drop=True)
                       for code, g in df.groupby('code', sort=False)}
         return stock_data
@@ -174,6 +190,8 @@ def _build_stocks():
         if not fname.endswith('.csv'):
             continue
         code = fname.replace('.csv', '')
+        if main_codes is not None and code not in main_codes:
+            continue
         fpath = os.path.join(stock_dir, fname)
         try:
             df = pd.read_csv(fpath, encoding='utf-8-sig',

@@ -1,0 +1,125 @@
+# -*- coding: utf-8 -*-
+"""v3 状态机最终调优: 找止损阈值的 sweet spot"""
+import os, sys, io
+import numpy as np
+import pandas as pd
+
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+LOOKBACK = 30
+MAX_HOLD = 180
+QIAN_RUN = 10
+
+
+def sell_v3(td_seg, gua_seg, stk_m_seg, cl_seg, stop_pct=None):
+    n = len(td_seg)
+    p0 = cl_seg[0]
+    in_state = False
+    for k in range(1, n):
+        if stop_pct is not None and (cl_seg[k] / p0 - 1) * 100 <= stop_pct:
+            return k, 'stop'
+        if not in_state:
+            if not np.isnan(td_seg[k]) and td_seg[k] >= 80:
+                in_state = True
+            continue
+        if stk_m_seg[k] == '110':
+            return k, 'm_dui'
+    return n - 1, 'timeout'
+
+
+def main():
+    g = pd.read_parquet(os.path.join(ROOT, 'data_layer/data/foundation/stock_multi_scale_gua_daily.parquet'),
+                        columns=['date', 'code', 'd_gua', 'm_gua', 'y_gua', 'd_trend'])
+    g['date'] = g['date'].astype(str); g['code'] = g['code'].astype(str).str.zfill(6)
+    for c in ['d_gua', 'm_gua', 'y_gua']:
+        g[c] = g[c].astype(str).str.zfill(3)
+    g.rename(columns={'d_gua': 'stk_d', 'm_gua': 'stk_m', 'y_gua': 'stk_y'}, inplace=True)
+
+    market = pd.read_parquet(os.path.join(ROOT, 'data_layer/data/foundation/multi_scale_gua_daily.parquet'),
+                              columns=['date', 'y_gua'])
+    market['date'] = market['date'].astype(str)
+    market['mkt_y'] = market['y_gua'].astype(str).str.zfill(3)
+    market = market[['date', 'mkt_y']].drop_duplicates('date')
+
+    p = pd.read_parquet(os.path.join(ROOT, 'data_layer/data/stocks.parquet'),
+                        columns=['date', 'code', 'close', 'main_force', 'retail'])
+    p['date'] = p['date'].astype(str); p['code'] = p['code'].astype(str).str.zfill(6)
+
+    df = g.merge(p, on=['date', 'code'], how='inner').merge(market, on='date', how='left')
+    df = df.sort_values(['code', 'date']).reset_index(drop=True)
+    df = df.dropna(subset=['close', 'stk_d', 'd_trend']).reset_index(drop=True)
+
+    code_arr = df['code'].to_numpy(); date_arr = df['date'].to_numpy()
+    close_arr = df['close'].to_numpy().astype(np.float64)
+    stk_d_arr = df['stk_d'].to_numpy()
+    stk_m_arr = df['stk_m'].to_numpy(); stk_y_arr = df['stk_y'].to_numpy()
+    mkt_y_arr = df['mkt_y'].to_numpy()
+    trend_arr = df['d_trend'].to_numpy().astype(np.float32)
+    sanhu_arr = df['retail'].to_numpy().astype(np.float32)
+
+    code_change = np.r_[True, code_arr[1:] != code_arr[:-1]]
+    code_starts = np.where(code_change)[0]
+    code_ends = np.r_[code_starts[1:], len(code_arr)]
+
+    rows = []
+    for ci in range(len(code_starts)):
+        s = code_starts[ci]; e = code_ends[ci]
+        if e - s < LOOKBACK + MAX_HOLD + 5: continue
+        for i in range(LOOKBACK, e - s - MAX_HOLD - 1):
+            gi = s + i
+            if mkt_y_arr[gi] != '001': continue
+            if stk_d_arr[gi] != '011': continue
+            if stk_m_arr[gi] == '111': continue
+            score = 0
+            if stk_y_arr[gi] == '101': score += 1
+            if gi - 5 >= s:
+                sanhu_5d = float(np.nanmean(sanhu_arr[gi-5:gi+1]))
+                if sanhu_5d < -50: score += 1
+                elif sanhu_5d < -30: score += 1
+            if score < 2: continue
+
+            buy = i; end = i + MAX_HOLD + 1
+            if s + end > e: continue
+            gua_seg = stk_d_arr[s+buy:s+end]
+            stk_m_seg = stk_m_arr[s+buy:s+end]
+            cl_seg = close_arr[s+buy:s+end]
+            td_seg = trend_arr[s+buy:s+end]
+            n_qian = int((gua_seg[:31] == '111').sum())
+
+            row = {'date': date_arr[gi], 'is_zsl': n_qian >= QIAN_RUN}
+
+            for stop in [None, -8, -10, -12, -15, -20]:
+                name = f'stop{stop}' if stop is not None else 'nostop'
+                k, st = sell_v3(td_seg, gua_seg, stk_m_seg, cl_seg, stop_pct=stop)
+                row[f'r_{name}'] = (cl_seg[k] / cl_seg[0] - 1) * 100
+                row[f'h_{name}'] = k
+                row[f't_{name}'] = st
+            rows.append(row)
+
+    df_h = pd.DataFrame(rows)
+    df_h['seg'] = ''
+    df_h.loc[(df_h['date'] >= '2019-01-01') & (df_h['date'] < '2020-01-01'), 'seg'] = 'w2_2019'
+    df_h.loc[(df_h['date'] >= '2021-01-01') & (df_h['date'] < '2022-01-01'), 'seg'] = 'w4_2021'
+    print(f'\n入场: {len(df_h)}')
+
+    print(f'\n## 止损阈值 sweet spot')
+    print(f'  {"阈值":<10} {"全期望":>7} {"胜率":>5} {"持仓":>5} {"主升期":>8} {"假期":>7} {"w2":>7} {"w4":>7} {"timeout%":>9}')
+    for stop in [None, -8, -10, -12, -15, -20]:
+        name = f'stop{stop}' if stop is not None else 'nostop'
+        rcol = f'r_{name}'; hcol = f'h_{name}'; tcol = f't_{name}'
+        sub = df_h.dropna(subset=[rcol])
+        ret = sub[rcol].mean()
+        win = (sub[rcol] > 0).mean() * 100
+        hold = sub[hcol].mean()
+        zsl = sub[sub['is_zsl']][rcol].mean() if sub['is_zsl'].sum() > 0 else float('nan')
+        fake = sub[~sub['is_zsl']][rcol].mean() if (~sub['is_zsl']).sum() > 0 else float('nan')
+        ret_w2 = sub[sub['seg'] == 'w2_2019'][rcol].mean()
+        ret_w4 = sub[sub['seg'] == 'w4_2021'][rcol].mean()
+        to_pct = (sub[tcol] == 'timeout').mean() * 100
+        label = f'-{abs(stop)}%' if stop is not None else '无止损'
+        print(f'  {label:<10} {ret:>+6.2f} {win:>4.1f} {hold:>5.1f} {zsl:>+7.2f} {fake:>+6.2f} {ret_w2:>+6.2f} {ret_w4:>+6.2f} {to_pct:>8.1f}')
+
+
+if __name__ == '__main__':
+    main()

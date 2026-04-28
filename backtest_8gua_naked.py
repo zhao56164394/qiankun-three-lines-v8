@@ -131,7 +131,12 @@ def main():
         patch_disable_gate()
         patch_disable_filters()
         patch_apply_ablation()  # 最后应用 ablation patch, 覆盖前面的清空
-        result, stats = b8.run()
+        # 支持 env 自定义时间区间 (用于 OOS / IS 切片)
+        ys = os.environ.get('BACKTEST_START')
+        ye = os.environ.get('BACKTEST_END')
+        if ys or ye:
+            print(f'[PATCH 时间区间] {ys or "默认"} ~ {ye or "默认"}')
+        result, stats = b8.run(start_date=ys, end_date=ye)
 
         # 3. 刚生成的 result.json 是裸跑内容, 改名为 naked_result.json (或 ablation 自定义路径)
         if os.path.exists(FORMAL_RESULT_PATH):

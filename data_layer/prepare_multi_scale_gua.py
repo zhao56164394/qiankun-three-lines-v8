@@ -40,10 +40,11 @@ GUA_MEANINGS = {
 }
 
 
-def compute_scale_per_day(df_daily: pd.DataFrame, freq: str):
+def compute_scale_per_day(df_daily: pd.DataFrame, freq: str, window: int = 55):
     """对每个交易日, 在 freq 级别 K 线序列(完整历史 + 当日未收) 上计算 trend 和 main_force
 
     freq: 'W-FRI' (周) 或 'M' (月)
+    window: HHV/LLV 窗口长度 (周数 / 月数), 默认 55 (旧版本); 短窗口 12 命中率更高
     返回: (trend_arr, mf_arr), 长度 = len(df_daily)
     """
     df = df_daily.copy().sort_values('date').reset_index(drop=True)
@@ -71,9 +72,9 @@ def compute_scale_per_day(df_daily: pd.DataFrame, freq: str):
     n_p = len(p_stats)
 
     # 完整期 trend 的中间状态 (SMA1, SMA2, trend value at each period end)
-    # min_periods=1 配通达信 LLV 行为: 不足 55 根时用现有所有 bar
-    hhv = pd.Series(all_hi).rolling(55, min_periods=1).max().values
-    llv = pd.Series(all_lo).rolling(55, min_periods=1).min().values
+    # min_periods=1 配通达信 LLV 行为: 不足 window 根时用现有所有 bar
+    hhv = pd.Series(all_hi).rolling(window, min_periods=1).max().values
+    llv = pd.Series(all_lo).rolling(window, min_periods=1).min().values
     denom = hhv - llv
     rsv_w = np.where(denom > 0, (all_close - llv) / denom * 100, 50.0)
     sma1_w = _tdx_sma(rsv_w, 5, 1)
@@ -103,7 +104,7 @@ def compute_scale_per_day(df_daily: pd.DataFrame, freq: str):
         p_cl = close_arr[i]
 
         # RSV: 窗口 = 完整期[max(0,w-54)..w-1] + 当日未收 (w=0 时只有 partial)
-        start = max(0, w - 54)
+        start = max(0, w - (window - 1))
         completed_lo = all_lo[start:w] if w > start else np.array([])
         completed_hi = all_hi[start:w] if w > start else np.array([])
         llv_val = min(completed_lo.min() if len(completed_lo) > 0 else p_lo, p_lo)
@@ -199,19 +200,22 @@ def main():
     df = pd.read_csv(src, encoding='utf-8-sig')
     print(f'  {len(df)} 条 ({df["date"].iloc[0]} ~ {df["date"].iloc[-1]})')
 
-    # --- 日卦: 用现成 trend + main_force ---
-    d_trend = df['trend'].astype(float).values
-    d_mf = df['main_force'].astype(float).values
+    # --- 日卦 (日 K 尺度, 12 日窗口 — 命中率 88% / 旧 55 日仅 61%) ---
+    # 旧: 用 df['trend'] 列 (默认 55 日窗口)
+    # 新: 自己用 compute_scale_per_day 算 freq='D' window=12, 与 m/y 卦一致
+    # 注: 日级别没有期内未收, 直接每天 = 一期, partial=close
+    print('计算 日卦 (日 K 尺度, 12 日窗口) ...')
+    d_trend, d_mf = compute_scale_per_day(df, 'D', window=12)
     d_pos, d_spd, d_acc, d_gua = apply_v10_rules(d_trend, d_mf)
 
-    # --- 月卦 (周尺度) ---
-    print('计算 月卦 (周 K 尺度) ...')
-    m_trend, m_mf = compute_scale_per_day(df, 'W-FRI')
+    # --- 月卦 (周尺度, 12 周窗口 — 命中率 100% / 旧 55 周仅 70.8%) ---
+    print('计算 月卦 (周 K 尺度, 12 周窗口) ...')
+    m_trend, m_mf = compute_scale_per_day(df, 'W-FRI', window=12)
     m_pos, m_spd, m_acc, m_gua = apply_v10_rules(m_trend, m_mf)
 
-    # --- 年卦 (月尺度) ---
-    print('计算 年卦 (月 K 尺度) ...')
-    y_trend, y_mf = compute_scale_per_day(df, 'M')
+    # --- 年卦 (月尺度, 12 月窗口 — 已校准, 命中率 72%) ---
+    print('计算 年卦 (月 K 尺度, 12 月窗口) ...')
+    y_trend, y_mf = compute_scale_per_day(df, 'M', window=12)
     y_pos, y_spd, y_acc, y_gua = apply_v10_rules(y_trend, y_mf)
 
     out = pd.DataFrame({

@@ -86,7 +86,7 @@ def load_stock_bagua_map(force_reload: bool = False) -> dict:
     sub['code'] = sub['code'].astype(str).str.zfill(6)
     sub['gua_code'] = sub['gua_code'].astype(str).str.zfill(3)
 
-    keys = list(zip(sub['date'].values, sub['code'].values))
+    keys = list(zip(sub['date'].to_numpy(), sub['code'].to_numpy()))
     records = sub.to_dict('records')
     out = {}
     for k, r in zip(keys, records):

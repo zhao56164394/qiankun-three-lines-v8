@@ -227,13 +227,21 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
         'trend_break70': lambda sd, i: calc_sell_trend_break(sd, i, trend_floor=70),
     }
 
-    # 策略配置
-    zhen_strat = GUA_STRATEGY['100']
-    li_strat = GUA_STRATEGY['101']
-    qian_strat = GUA_STRATEGY['111']
-    dui_strat = GUA_STRATEGY['110']
-    gen_strat = GUA_STRATEGY['001']
-    kun_strat = GUA_STRATEGY['000']
+    # y_gua 主分治: 不再按 d_gua 分支取 strat, 改为运行时按 _today_y_gua 取
+    # GUA_STRATEGY 字典 key 是 y_gua, 不是 d_gua
+
+    # 预计算 from_map: 每个日期对应的 last_from y_gua (上次切换前的 y_gua)
+    # 用于 change_type_skip (变爻 from→to 路由)
+    _from_map = {}
+    if gate_map:
+        _last_y = None
+        _last_from = None
+        for _d in sorted(gate_map.keys()):
+            _y = gate_map[_d][1]
+            if _last_y is not None and _y != _last_y:
+                _last_from = _last_y
+            _from_map[_d] = _last_from
+            _last_y = _y
 
     all_signals = []
     filter_stats = {'gua_inactive': 0, 'zz_trend': 0, 'di_gua': 0, 'stk_mf': 0,
@@ -245,7 +253,8 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                      'zhen_gua': 0, 'zhen_ren_gua': 0, 'zhen_pool_days': 0, 'pool_days': 0,
                      'li_gua': 0, 'li_ren_gua': 0,
                      'kun_gua': 0, 'kun_ren_gua': 0,
-                     'gate_y_gua': 0, 'gate_m_gua': 0}
+                     'gate_y_gua': 0, 'gate_m_gua': 0,
+                     'change_type': 0}
 
     for code, df in stock_data.items():
         if len(df) < 35:
@@ -367,554 +376,121 @@ def scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map=None, big_cyc
                         continue
 
             # ============================================================
-            # 乾卦: 上穿阈值信号 — 满足条件即出池
+            # y_gua 主分治: 按当日大盘 y_gua 取 strat → 统一 double_rise 逻辑
+            # 起步: 8 桶都用 kun 模板 (double_rise 触发, bear 卖出)
             # ============================================================
-            if tian_gua == '111':
-                qian_threshold = qian_strat.get('qian_cross_threshold', 60)
-                if (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                        and trend[i-1] < qian_threshold and trend[i] >= qian_threshold):
-                    # 上穿阈值条件满足 → 出池(不管过滤结果)
-                    qian_market_block = qian_strat.get('qian_exclude_ren_gua', set())
-                    if ren_gua in qian_market_block:
-                        filter_stats['qian_ren_gua'] += 1
-                    elif di_gua in qian_strat.get('qian_exclude_di_gua', set()):
-                        filter_stats['qian_d'] += 1
-                    elif not _pool_days_ok(qian_strat, i, pool_start_idx):
-                        filter_stats['pool_days'] += 1
-                    else:
-                        next_idx = i + 1
-                        if next_idx < len(df):
-                            buy_price = opens[next_idx]
-                            if buy_price > 0 and not np.isnan(buy_price):
-                                _, sell_idx = calc_sell_bull(df, next_idx)
-                                sell_date = dates[sell_idx] if sell_idx < len(dates) else dates[-1]
-                                sell_price = closes[sell_idx]
-                                hold_days = sell_idx - next_idx
-                                if hold_days > 0:
-                                    all_signals.append({
-                                        'code': code, 'signal_date': dt_str,
-                                        'buy_date': str(dates[next_idx]),
-                                        'sell_date': str(sell_date),
-                                        'buy_price': buy_price, 'sell_price': sell_price,
-                                        'actual_ret': (sell_price / buy_price - 1) * 100,
-                                        'hold_days': hold_days,
-                                        'pool_retail': pool_retail,
-                                        'pool_days': _calc_pool_days(i, pool_start_idx),
-                                        'is_skip': False,
-                                        'hex_code': '',
-                                        'combo': di_gua,
-                                        'di_gua': di_gua,
-                                        'di_gua_name': di_gua_name,
-                    
-                                        'tian_gua': tian_gua,
-                                        'sell_method': 'qian_bull',
-                                        'ren_gua': ren_gua,
-                                        'ren_gua_name': ren_gua_name,
-                                        'tian_gua_name': tian_gua_name,
-                                    })
-                    # 上穿60触发 → 出池清零
-                    pooled = False; pool_retail = 0; pool_start_idx = None
+            strat = GUA_STRATEGY.get(_today_y_gua) if _today_y_gua else None
+            if strat is None or not strat.get('active', True):
+                filter_stats['gua_inactive'] += 1
+                continue
+            if not strat.get('buy', True):
+                # 整桶 skip (用于以后某桶整桶不买)
                 continue
 
-            # ============================================================
-            # 兑卦: 支持双升 / 上穿阈值 两种买点模式
-            # ============================================================
-            if tian_gua == '110':
-                dui_mode = dui_strat.get('dui_buy_mode', 'double_rise')
-                dui_cross_threshold = dui_strat.get('dui_cross_threshold', 20)
-                is_dui_trigger = False
-                if dui_mode == 'cross':
-                    is_dui_trigger = (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                                      and trend[i-1] < dui_cross_threshold and trend[i] >= dui_cross_threshold)
-                else:
-                    is_dui_trigger = (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                                      and not np.isnan(retail[i]) and not np.isnan(retail[i-1])
-                                      and retail[i] > retail[i-1] and trend[i] > trend[i-1] and trend[i] > 11)
-                if is_dui_trigger:
-                    # ����������� �� ��������ǰ���ŵĸ����ԣ����ų���ǰ���۽��ص��г���
-                    dui_pair_whitelist = dui_strat.get('dui_market_stock_whitelist') or {}
-                    if dui_pair_whitelist:
-                        allowed_stocks = dui_pair_whitelist.get(str(ren_gua).zfill(3), set())
-                        if di_gua not in allowed_stocks:
-                            filter_stats['dui_ren_gua'] += 1
-                            pooled = False; pool_retail = 0; pool_start_idx = None
-                            continue
-                    else:
-                        dui_market_block = dui_strat.get('dui_exclude_ren_gua', set())
-                        if ren_gua in dui_market_block:
-                            filter_stats['dui_ren_gua'] += 1
-                            pooled = False; pool_retail = 0; pool_start_idx = None
-                            continue
-                        dui_allow = dui_strat.get('dui_allow_di_gua')
-                        if dui_allow and di_gua not in dui_allow:
-                            filter_stats['dui_gua'] += 1
-                            pooled = False; pool_retail = 0; pool_start_idx = None
-                            continue
-                    if not _pool_days_ok(dui_strat, i, pool_start_idx):
-                        filter_stats['pool_days'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
+            # 变爻 skip (test12 yao 框架): 命中 change_type_skip 集合则 skip 该信号
+            _skip_ct = strat.get('change_type_skip')
+            if _skip_ct:
+                _today_from = _from_map.get(dt_str)
+                if _today_from is not None:
+                    _ct = f'{_today_from}->{_today_y_gua}'
+                    if _ct in _skip_ct:
+                        filter_stats['change_type'] += 1
                         continue
-                    next_idx = i + 1
-                    if next_idx < len(df):
-                        buy_price = opens[next_idx]
-                        if buy_price > 0 and not np.isnan(buy_price):
-                            dui_sell_method = dui_strat.get('sell', 'dui_bear')
-                            if dui_sell_method == 'dui_bear':
-                                _, sell_idx = calc_sell_bear(df, i)
-                            else:
-                                sell_fn = sell_fns[dui_sell_method]
-                                _, sell_idx = sell_fn(df, i)
-                            sell_date = dates[sell_idx] if sell_idx < len(dates) else dates[-1]
-                            sell_price = closes[sell_idx]
-                            hold_days = sell_idx - next_idx
-                            if hold_days > 0:
-                                all_signals.append({
-                                    'code': code, 'signal_date': dt_str,
-                                    'buy_date': str(dates[next_idx]),
-                                    'sell_date': str(sell_date),
-                                    'buy_price': buy_price, 'sell_price': sell_price,
-                                    'actual_ret': (sell_price / buy_price - 1) * 100,
-                                    'hold_days': hold_days,
-                                    'pool_retail': pool_retail,
-                                    'pool_days': _calc_pool_days(i, pool_start_idx),
-                                    'is_skip': False,
-                                    'hex_code': '',
-                                    'combo': di_gua,
-                                    'di_gua': di_gua,
-                                    'di_gua_name': di_gua_name,
-                
-                                    'tian_gua': tian_gua,
-                                    'sell_method': dui_sell_method,
-                                    'ren_gua': ren_gua,
-                                    'ren_gua_name': ren_gua_name,
-                                    'tian_gua_name': tian_gua_name,
-                                })
-                    # 触发买点后 → 出池清零
-                    pooled = False; pool_retail = 0; pool_start_idx = None
+
+            # 双升触发 (与 test4 共享分支一致)
+            if np.isnan(trend[i]) or np.isnan(trend[i-1]):
+                continue
+            if np.isnan(retail[i]) or np.isnan(retail[i-1]):
                 continue
 
-            # ============================================================
-            # 艮卦: 固定母版(排市场艮+仅坤/坎) + 支持双升/上穿 + 二次验证
-            # ============================================================
-            if tian_gua == '001' and gen_strat.get('gen_buy'):
-                gen_mode = gen_strat.get('gen_buy_mode', 'double_rise')
-                gen_cross_threshold = gen_strat.get('gen_cross_threshold', 20)
-                is_gen_trigger = False
-                if gen_mode == 'cross':
-                    is_gen_trigger = (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                                      and trend[i-1] < gen_cross_threshold and trend[i] >= gen_cross_threshold)
-                else:
-                    is_gen_trigger = (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                                      and not np.isnan(retail[i]) and not np.isnan(retail[i-1])
-                                      and retail[i] > retail[i-1] and trend[i] > trend[i-1] and trend[i] > 11)
-                if is_gen_trigger:
-                    gen_market_block = gen_strat.get('gen_exclude_ren_gua', set())
-                    if ren_gua in gen_market_block:
-                        filter_stats['gen_ren_gua'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    gen_allow = gen_strat.get('gen_allow_di_gua')
-                    if gen_allow and di_gua not in gen_allow:
-                        filter_stats['gen_gua'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    if not _pool_days_ok(gen_strat, i, pool_start_idx):
-                        filter_stats['pool_days'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    next_idx = i + 1
-                    if next_idx < len(df):
-                        buy_price = opens[next_idx]
-                        if buy_price > 0 and not np.isnan(buy_price):
-                            gen_sell_method = gen_strat.get('sell', 'bear')
-                            sell_fn = sell_fns[gen_sell_method]
-                            _, sell_idx = sell_fn(df, i)
-                            sell_date = dates[sell_idx] if sell_idx < len(dates) else dates[-1]
-                            sell_price = closes[sell_idx]
-                            hold_days = sell_idx - next_idx
-                            if hold_days > 0:
-                                all_signals.append({
-                                    'code': code, 'signal_date': dt_str,
-                                    'buy_date': str(dates[next_idx]),
-                                    'sell_date': str(sell_date),
-                                    'buy_price': buy_price, 'sell_price': sell_price,
-                                    'actual_ret': (sell_price / buy_price - 1) * 100,
-                                    'hold_days': hold_days,
-                                    'pool_retail': pool_retail,
-                                    'pool_days': _calc_pool_days(i, pool_start_idx),
-                                    'is_skip': False,
-                                    'hex_code': '',
-                                    'combo': di_gua,
-                                    'di_gua': di_gua,
-                                    'di_gua_name': di_gua_name,
-                
-                                    'tian_gua': tian_gua,
-                                    'sell_method': f'gen_{gen_sell_method}',
-                                    'ren_gua': ren_gua,
-                                    'ren_gua_name': ren_gua_name,
-                                    'tian_gua_name': tian_gua_name,
-                                })
-                    pooled = False; pool_retail = 0; pool_start_idx = None
+            buy_mode = strat.get('buy_mode', 'double_rise')
+            cross_threshold = strat.get('cross_threshold', 20)
+            is_trigger = False
+            if buy_mode == 'cross':
+                is_trigger = (trend[i-1] < cross_threshold and trend[i] >= cross_threshold)
+            else:  # double_rise
+                is_trigger = (retail[i] > retail[i-1] and trend[i] > trend[i-1] and trend[i] > 11)
+
+            if not is_trigger:
                 continue
 
-            # ============================================================
-            # 坤卦: 支持双升 / 上穿阈值 两种买点模式
-            # ============================================================
-            if tian_gua == '000':
-                kun_mode = kun_strat.get('kun_buy_mode', 'double_rise')
-                kun_cross_threshold = kun_strat.get('kun_cross_threshold', 20)
-                is_kun_trigger = False
-                if kun_mode == 'cross':
-                    is_kun_trigger = (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                                      and trend[i-1] < kun_cross_threshold and trend[i] >= kun_cross_threshold)
-                else:
-                    is_kun_trigger = (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                                      and not np.isnan(retail[i]) and not np.isnan(retail[i-1])
-                                      and retail[i] > retail[i-1] and trend[i] > trend[i-1] and trend[i] > 11)
-                if is_kun_trigger:
-                    kun_market_block = kun_strat.get('kun_exclude_ren_gua', set())
-                    if ren_gua in kun_market_block:
-                        filter_stats['kun_ren_gua'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    kun_allow = kun_strat.get('kun_allow_di_gua')
-                    if kun_allow and di_gua not in kun_allow:
-                        filter_stats['kun_gua'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    # 池深分档 (含池天) - 覆盖旧的 pool_depth + pool_days_min/max 独立检查
-                    _ok, _reason = _pool_depth_tier_ok(kun_strat, pool_retail, _calc_pool_days(i, pool_start_idx), _today_y_gua)
-                    if not _ok:
-                        filter_stats[_reason] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    next_idx = i + 1
-                    if next_idx < len(df):
-                        buy_price = opens[next_idx]
-                        if buy_price > 0 and not np.isnan(buy_price):
-                            kun_sell_method = kun_strat.get('sell', 'kun_bear')
-                            kun_exec_method = kun_sell_method.removeprefix('kun_')
-                            if kun_exec_method == 'bear':
-                                _, sell_idx = calc_sell_bear(df, i)
-                            else:
-                                sell_fn = sell_fns[kun_exec_method]
-                                _, sell_idx = sell_fn(df, i)
-                            sell_date = dates[sell_idx] if sell_idx < len(dates) else dates[-1]
-                            sell_price = closes[sell_idx]
-                            hold_days = sell_idx - next_idx
-                            if hold_days > 0:
-                                all_signals.append({
-                                    'code': code, 'signal_date': dt_str,
-                                    'buy_date': str(dates[next_idx]),
-                                    'sell_date': str(sell_date),
-                                    'buy_price': buy_price, 'sell_price': sell_price,
-                                    'actual_ret': (sell_price / buy_price - 1) * 100,
-                                    'hold_days': hold_days,
-                                    'pool_retail': pool_retail,
-                                    'pool_days': _calc_pool_days(i, pool_start_idx),
-                                    'is_skip': False,
-                                    'hex_code': '',
-                                    'combo': di_gua,
-                                    'di_gua': di_gua,
-                                    'di_gua_name': di_gua_name,
-                
-                                    'tian_gua': tian_gua,
-                                    'sell_method': f'kun_{kun_exec_method}',
-                                    'ren_gua': ren_gua,
-                                    'ren_gua_name': ren_gua_name,
-                                    'tian_gua_name': tian_gua_name,
-                                })
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                continue
-
-            # ============================================================
-            # 巽卦: 正式独立分支（个股仅坎 + 池底≤-300 + 双升t>11 + bear）
-            # ============================================================
-            if tian_gua == '011':
-                xun_strat = GUA_STRATEGY['011']
-                xun_buy_param = xun_strat.get('xun_buy_param', 11)
-                xun_buy_mode = xun_strat.get('xun_buy', 'double_rise')
-                xun_allow = xun_strat.get('xun_allow_di_gua')
-
-                if not xun_strat['active']:
-                    filter_stats['gua_inactive'] += 1
-                    continue
-
-                if np.isnan(trend[i]) or np.isnan(trend[i-1]):
-                    continue
-
-                if xun_allow and di_gua not in xun_allow:
-                    filter_stats['xun_gua'] += 1
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                    continue
-
-                # 双升买法: 散户上升 + 趋势上升 + 趋势 > 阈值
-                if xun_buy_mode == 'double_rise':
-                    is_xun_trigger = (not np.isnan(retail[i]) and not np.isnan(retail[i-1])
-                                      and retail[i] > retail[i-1]
-                                      and trend[i] > trend[i-1] and trend[i] > xun_buy_param)
-                else:
-                    is_xun_trigger = (trend[i] > trend[i-1] and trend[i] > xun_buy_param)
-
-                if is_xun_trigger:
-                    pool_days = _calc_pool_days(i, pool_start_idx)
-                    ok, reason = _pool_depth_tier_ok(xun_strat, pool_retail, pool_days, _today_y_gua)
-                    if not ok:
-                        filter_stats[reason] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    next_idx = i + 1
-                    if next_idx >= len(df):
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    buy_price = opens[next_idx]
-                    if buy_price <= 0 or np.isnan(buy_price):
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-
-                    _, sell_idx = calc_sell_bear(df, i)
-                    sell_date = dates[sell_idx] if sell_idx < len(dates) else dates[-1]
-                    sell_price = closes[sell_idx]
-                    hold_days = sell_idx - next_idx
-
-                    if hold_days > 0:
-                        all_signals.append({
-                            'code': code, 'signal_date': dt_str,
-                            'buy_date': str(dates[next_idx]),
-                            'sell_date': str(sell_date),
-                            'buy_price': buy_price, 'sell_price': sell_price,
-                            'actual_ret': (sell_price / buy_price - 1) * 100,
-                            'hold_days': hold_days,
-                            'pool_retail': pool_retail,
-                            'pool_days': _calc_pool_days(i, pool_start_idx),
-                            'is_skip': False,
-                            'hex_code': '',
-                            'combo': di_gua,
-                            'di_gua': di_gua,
-                            'di_gua_name': di_gua_name,
-        
-                            'tian_gua': tian_gua,
-                            'sell_method': 'xun_bear',
-                            'ren_gua': ren_gua,
-                            'ren_gua_name': ren_gua_name,
-                            'tian_gua_name': tian_gua_name,
-                        })
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                continue
-
-            # ============================================================
-            # 震卦: 正式独立分支（市场层/个股层/池底验证已按单变量逐层固化）
-            # ============================================================
-            if tian_gua == '100' and zhen_strat.get('zhen_buy'):
-                zhen_mode = zhen_strat.get('zhen_buy_mode', 'double_rise')
-                zhen_cross_threshold = zhen_strat.get('zhen_cross_threshold', 20)
-                is_zhen_trigger = False
-                if zhen_mode == 'cross':
-                    is_zhen_trigger = (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                                       and trend[i-1] < zhen_cross_threshold and trend[i] >= zhen_cross_threshold)
-                else:
-                    is_zhen_trigger = (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                                       and not np.isnan(retail[i]) and not np.isnan(retail[i-1])
-                                       and retail[i] > retail[i-1] and trend[i] > trend[i-1] and trend[i] > 11)
-                if is_zhen_trigger:
-                    zhen_market_block = zhen_strat.get('zhen_exclude_ren_gua', set())
-                    if ren_gua in zhen_market_block:
-                        filter_stats['zhen_ren_gua'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    zhen_allow = zhen_strat.get('zhen_allow_di_gua')
-                    if zhen_allow and di_gua not in zhen_allow:
-                        filter_stats['zhen_gua'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    pool_days = _calc_pool_days(i, pool_start_idx)
-                    ok, reason = _pool_depth_tier_ok(zhen_strat, pool_retail, pool_days, _today_y_gua)
-                    if not ok:
-                        filter_stats[reason] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    next_idx = i + 1
-                    if next_idx < len(df):
-                        buy_price = opens[next_idx]
-                        if buy_price > 0 and not np.isnan(buy_price):
-                            zhen_sell_method = zhen_strat.get('sell', 'bear')
-                            sell_fn = sell_fns[zhen_sell_method]
-                            _, sell_idx = sell_fn(df, i)
-                            sell_date = dates[sell_idx] if sell_idx < len(dates) else dates[-1]
-                            sell_price = closes[sell_idx]
-                            hold_days = sell_idx - next_idx
-                            if hold_days > 0:
-                                all_signals.append({
-                                    'code': code, 'signal_date': dt_str,
-                                    'buy_date': str(dates[next_idx]),
-                                    'sell_date': str(sell_date),
-                                    'buy_price': buy_price, 'sell_price': sell_price,
-                                    'actual_ret': (sell_price / buy_price - 1) * 100,
-                                    'hold_days': hold_days,
-                                    'pool_retail': pool_retail,
-                                    'pool_days': i - pool_start_idx if pool_start_idx is not None else None,
-                                    'is_skip': False,
-                                    'hex_code': '',
-                                    'combo': di_gua,
-                                    'di_gua': di_gua,
-                                    'di_gua_name': di_gua_name,
-                
-                                    'tian_gua': tian_gua,
-                                    'sell_method': f'zhen_{zhen_sell_method}',
-                                    'ren_gua': ren_gua,
-                                    'ren_gua_name': ren_gua_name,
-                                    'tian_gua_name': tian_gua_name,
-                                })
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                continue
-
-            # ============================================================
-            # 离卦: 正式独立分支（排市场艮 + 个股仅坤 + 池底二次验证）
-            # ============================================================
-            if tian_gua == '101' and li_strat.get('li_buy'):
-                li_mode = li_strat.get('li_buy_mode', 'double_rise')
-                li_cross_threshold = li_strat.get('li_cross_threshold', 20)
-                is_li_trigger = False
-                if li_mode == 'cross':
-                    is_li_trigger = (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                                     and trend[i-1] < li_cross_threshold and trend[i] >= li_cross_threshold)
-                else:
-                    is_li_trigger = (not np.isnan(trend[i]) and not np.isnan(trend[i-1])
-                                     and not np.isnan(retail[i]) and not np.isnan(retail[i-1])
-                                     and retail[i] > retail[i-1] and trend[i] > trend[i-1] and trend[i] > 11)
-                if is_li_trigger:
-                    li_market_block = li_strat.get('li_exclude_ren_gua', set())
-                    if ren_gua in li_market_block:
-                        filter_stats['li_ren_gua'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    li_allow = li_strat.get('li_allow_di_gua')
-                    if li_allow and di_gua not in li_allow:
-                        filter_stats['li_gua'] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    pool_days = _calc_pool_days(i, pool_start_idx)
-                    ok, reason = _pool_depth_tier_ok(li_strat, pool_retail, pool_days, _today_y_gua)
-                    if not ok:
-                        filter_stats[reason] += 1
-                        pooled = False; pool_retail = 0; pool_start_idx = None
-                        continue
-                    next_idx = i + 1
-                    if next_idx < len(df):
-                        buy_price = opens[next_idx]
-                        if buy_price > 0 and not np.isnan(buy_price):
-                            li_sell_method = li_strat.get('sell', 'bear')
-                            sell_fn = sell_fns[li_sell_method]
-                            _, sell_idx = sell_fn(df, i)
-                            sell_date = dates[sell_idx] if sell_idx < len(dates) else dates[-1]
-                            sell_price = closes[sell_idx]
-                            hold_days = sell_idx - next_idx
-                            if hold_days > 0:
-                                all_signals.append({
-                                    'code': code, 'signal_date': dt_str,
-                                    'buy_date': str(dates[next_idx]),
-                                    'sell_date': str(sell_date),
-                                    'buy_price': buy_price, 'sell_price': sell_price,
-                                    'actual_ret': (sell_price / buy_price - 1) * 100,
-                                    'hold_days': hold_days,
-                                    'pool_retail': pool_retail,
-                                    'pool_days': _calc_pool_days(i, pool_start_idx),
-                                    'is_skip': False,
-                                    'hex_code': '',
-                                    'combo': di_gua,
-                                    'di_gua': di_gua,
-                                    'di_gua_name': di_gua_name,
-                
-                                    'tian_gua': tian_gua,
-                                    'sell_method': f'li_{li_sell_method}',
-                                    'ren_gua': ren_gua,
-                                    'ren_gua_name': ren_gua_name,
-                                    'tian_gua_name': tian_gua_name,
-                                })
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                continue
-
-            # ============================================================
-            # 常规卦(艮/坎/震/离): 双升信号 — 满足双升即出池
-            # ============================================================
-            if np.isnan(trend[i]) or np.isnan(trend[i-1]): continue
-            if np.isnan(retail[i]) or np.isnan(retail[i-1]): continue
-
-            # 双升信号
-            if retail[i] > retail[i-1] and trend[i] > trend[i-1] and trend[i] > 11:
-                strat = GUA_STRATEGY.get(tian_gua)
-                if strat is None or not strat['active']:
-                    filter_stats['gua_inactive'] += 1
-                    # 双升触发 → 出池清零
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                    continue
-
-                # 池深分档验证 (pool_depth_tiers) + 池天 — 合并入一个 tier-aware 判断
-                _ok, _reason = _pool_depth_tier_ok(strat, pool_retail, _calc_pool_days(i, pool_start_idx), _today_y_gua)
-                if not _ok:
-                    filter_stats[_reason] += 1
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                    continue
-
-                # 卖法(按中证象卦查表)
-                sell_method = strat['sell']
-                sell_fn = sell_fns[sell_method]
-                _, sell_idx = sell_fn(df, i)
-
-                next_idx = i + 1
-                if next_idx >= len(df):
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                    continue
-                buy_date = dates[next_idx]
-                buy_price = opens[next_idx]
-                sell_date = dates[sell_idx] if sell_idx < len(dates) else dates[-1]
-                sell_price = closes[sell_idx]
-                hold_days = sell_idx - next_idx
-
-                if buy_price <= 0 or np.isnan(buy_price) or hold_days <= 0:
-                    pooled = False; pool_retail = 0; pool_start_idx = None
-                    continue
-
-                actual_ret = (sell_price / buy_price - 1) * 100
-
-                all_signals.append({
-                    'code': code,
-                    'signal_date': dt_str,
-                    'buy_date': str(buy_date),
-                    'sell_date': str(sell_date),
-                    'buy_price': buy_price,
-                    'sell_price': sell_price,
-                    'actual_ret': actual_ret,
-                    'hold_days': hold_days,
-                    'pool_retail': pool_retail,
-                    'pool_days': _calc_pool_days(i, pool_start_idx),
-                    'is_skip': False,
-                    'hex_code': '',
-                    'combo': di_gua,
-                    'di_gua': di_gua,
-                    'di_gua_name': di_gua_name,
-
-                    'tian_gua': tian_gua,
-                    'sell_method': strat['sell'],
-                    'ren_gua': ren_gua,
-                    'ren_gua_name': ren_gua_name,
-                    'tian_gua_name': tian_gua_name,
-                })
-                # 双升触发 → 出池清零
+            # 过滤: 排市场卦 (ren_gua) / 个股卦白名单 (di_gua)
+            exclude_ren = strat.get('exclude_ren_gua') or set()
+            if ren_gua in exclude_ren:
+                filter_stats.setdefault('y_gua_ren', 0)
+                filter_stats['y_gua_ren'] += 1
                 pooled = False; pool_retail = 0; pool_start_idx = None
+                continue
+            allow_di = strat.get('allow_di_gua')
+            if allow_di and di_gua not in allow_di:
+                filter_stats.setdefault('y_gua_di', 0)
+                filter_stats['y_gua_di'] += 1
+                pooled = False; pool_retail = 0; pool_start_idx = None
+                continue
+
+            # 池深 + 池天 (tier-aware)
+            _ok, _reason = _pool_depth_tier_ok(strat, pool_retail, _calc_pool_days(i, pool_start_idx), _today_y_gua)
+            if not _ok:
+                filter_stats[_reason] += 1
+                pooled = False; pool_retail = 0; pool_start_idx = None
+                continue
+
+            # 卖出 + 记录
+            sell_method = strat.get('sell', 'bear')
+            sell_fn = sell_fns[sell_method]
+            _, sell_idx = sell_fn(df, i)
+
+            next_idx = i + 1
+            if next_idx >= len(df):
+                pooled = False; pool_retail = 0; pool_start_idx = None
+                continue
+            buy_date = dates[next_idx]
+            buy_price = opens[next_idx]
+            sell_date = dates[sell_idx] if sell_idx < len(dates) else dates[-1]
+            sell_price = closes[sell_idx]
+            hold_days = sell_idx - next_idx
+
+            if buy_price <= 0 or np.isnan(buy_price) or hold_days <= 0:
+                pooled = False; pool_retail = 0; pool_start_idx = None
+                continue
+
+            actual_ret = (sell_price / buy_price - 1) * 100
+
+            all_signals.append({
+                'code': code,
+                'signal_date': dt_str,
+                'buy_date': str(buy_date),
+                'sell_date': str(sell_date),
+                'buy_price': buy_price,
+                'sell_price': sell_price,
+                'actual_ret': actual_ret,
+                'hold_days': hold_days,
+                'pool_retail': pool_retail,
+                'pool_days': _calc_pool_days(i, pool_start_idx),
+                'is_skip': False,
+                'hex_code': '',
+                'combo': di_gua,
+                'di_gua': di_gua,
+                'di_gua_name': di_gua_name,
+                'tian_gua': tian_gua,
+                'sell_method': sell_method,
+                'ren_gua': ren_gua,
+                'ren_gua_name': ren_gua_name,
+                'tian_gua_name': tian_gua_name,
+                'y_gua': _today_y_gua,
+            })
+            pooled = False; pool_retail = 0; pool_start_idx = None
+
 
     print(f"  过滤统计: 空仓卦={filter_stats['gua_inactive']}, "
           f"中证趋势={filter_stats['zz_trend']}, "
           f"池底深度={filter_stats['pool_depth']}, "
           f"象卦拒绝={filter_stats['di_gua']}, "
           f"主力线={filter_stats['stk_mf']}")
-    print(f"  坤卦过滤: 人卦黑名单={filter_stats['kun_ren_gua']}, 象卦白名单外={filter_stats['kun_gua']}")
-    print(f"  乾卦过滤: 人卦黑名单={filter_stats['qian_ren_gua']}, 象卦离乾={filter_stats['qian_d']}")
-    print(f"  兑卦过滤: 人卦黑名单={filter_stats['dui_ren_gua']}, 象卦白名单外={filter_stats['dui_gua']}, 趋势过高={filter_stats['dui_trend']}")
-    print(f"  艮卦过滤: 人卦黑名单={filter_stats['gen_ren_gua']}, 象卦白名单外={filter_stats['gen_gua']}")
-    print(f"  巽卦过滤: 象卦白名单外={filter_stats['xun_gua']}")
-    print(f"  震卦过滤: 人卦黑名单={filter_stats['zhen_ren_gua']}, 象卦白名单外={filter_stats['zhen_gua']}")
-    print(f"  离卦过滤: 人卦黑名单={filter_stats['li_ren_gua']}, 象卦白名单外={filter_stats['li_gua']}")
+    print(f"  y_gua 路由过滤: 排市场卦={filter_stats.get('y_gua_ren', 0)}, "
+          f"个股卦白名单外={filter_stats.get('y_gua_di', 0)}, "
+          f"池天={filter_stats.get('pool_days', 0)}, "
+          f"变爻={filter_stats.get('change_type', 0)}")
     return pd.DataFrame(all_signals).sort_values('signal_date').reset_index(drop=True)
 
 
@@ -972,6 +548,7 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
                     'tian_gua_name': pos.get('tian_gua_name', ''),
                     'ren_gua': pos.get('ren_gua', ''),
                     'ren_gua_name': pos.get('ren_gua_name', ''),
+                    'y_gua': pos.get('y_gua', '???'),
                 })
             else:
                 new_pos.append(pos)
@@ -1035,6 +612,7 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
                         'tian_gua_name': c.get('tian_gua_name', ''),
                         'ren_gua': c.get('ren_gua', ''),
                         'ren_gua_name': c.get('ren_gua_name', ''),
+                        'y_gua': c.get('y_gua', '???'),
                     })
 
         # 4. 记录净值
@@ -1059,6 +637,7 @@ def simulate_8gua(sig_df, zz_df, max_pos=5, daily_limit=1, init_capital=None, ti
             'sell_method': pos.get('sell_method', '?'),
             'tian_gua': pos.get('tian_gua', ''),
             'tian_gua_name': pos.get('tian_gua_name', ''),
+            'y_gua': pos.get('y_gua', '???'),
         })
 
     _init = init_capital or INIT_CAPITAL
@@ -1220,8 +799,11 @@ def run(start_date=None, end_date=None, init_capital=None):
     # 2. 扫描信号
     print("\n[2] 扫描八卦分治信号...")
     sig = scan_signals_8gua(stock_data, zz1000, tian_gua_map, stk_mf_map, big_cycle_context=big_cycle_context, stock_bagua_map=stock_bagua_map, daily_bagua_map=daily_bagua_map, gate_map=gate_map, stock_gate_map=stock_gate_map)
-    sig = sig[(sig['signal_date'] >= year_start) &
-              (sig['signal_date'] < year_end)].reset_index(drop=True)
+    # signal_date 是 'YYYY-MM-DD' 格式, year_start/end 若是 'YYYYMMDD' 则要转换避免 '-'<'0' 错位
+    def _norm(d):
+        return f'{d[:4]}-{d[4:6]}-{d[6:]}' if isinstance(d, str) and len(d) == 8 and '-' not in d else d
+    sig = sig[(sig['signal_date'] >= _norm(year_start)) &
+              (sig['signal_date'] < _norm(year_end))].reset_index(drop=True)
 
     print(f"  总信号: {len(sig)}, 非skip: {(~sig['is_skip']).sum()}")
     signal_context = summarize_signal_context(sig)
@@ -1264,15 +846,15 @@ def run(start_date=None, end_date=None, init_capital=None):
     print(f"  均收益: {stats['avg_ret']:.2f}%")
     print(f"  均持仓: {stats['avg_hold']:.1f}天")
 
-    # Part2: 分卦贡献
+    # Part2: 分桶贡献 (按 y_gua 大盘环境分桶)
     print("\n" + "=" * 100)
-    print("  Part2: 分卦贡献")
+    print("  Part2: 分桶贡献 (y_gua 大盘环境)")
     print("=" * 100)
-    print(f"\n  {'卦':<15} {'笔数':>5} {'胜率%':>6} {'均收益%':>8} {'利润':>14} {'占比%':>6}")
+    print(f"\n  {'y_gua':<15} {'笔数':>5} {'胜率%':>6} {'均收益%':>8} {'利润':>14} {'占比%':>6}")
     print("  " + "-" * 60)
     total_profit = sum(t['profit'] for t in trades)
     for gua in ['000', '001', '010', '011', '100', '101', '110', '111']:
-        gua_trades = [t for t in trades if t.get('gua') == gua]
+        gua_trades = [t for t in trades if t.get('y_gua') == gua]
         if not gua_trades:
             print(f"  {gua} {GUA_NAMES[gua]:<10} {'空仓':>5}")
             continue
@@ -1303,17 +885,17 @@ def run(start_date=None, end_date=None, init_capital=None):
         wr = v['wins'] / v['count'] * 100 if v['count'] > 0 else 0
         print(f"  {y:<6} {v['count']:>5} {v['wins']:>5} {wr:>5.1f} {v['profit']:>13,.0f}")
 
-    # Part4: 分卦×年度明细
+    # Part4: 分桶 (y_gua) × 年度明细
     print("\n" + "=" * 100)
-    print("  Part4: 分卦×年度明细 (利润)")
+    print("  Part4: 分桶 (y_gua) × 年度明细 (利润)")
     print("=" * 100)
     years = sorted(yearly.keys())
     gua_list = ['000', '001', '010', '011', '100', '101', '110', '111']
-    header = f"  {'卦':<12}" + "".join(f"{y:>10}" for y in years) + f"{'合计':>12}"
+    header = f"  {'y_gua':<12}" + "".join(f"{y:>10}" for y in years) + f"{'合计':>12}"
     print(f"\n{header}")
     print("  " + "-" * (12 + 10 * len(years) + 12))
     for gua in gua_list:
-        gua_trades = [t for t in trades if t.get('gua') == gua]
+        gua_trades = [t for t in trades if t.get('y_gua') == gua]
         row = f"  {gua} {GUA_NAMES[gua]:<7}"
         total = 0
         for y in years:
@@ -1383,7 +965,7 @@ def run(start_date=None, end_date=None, init_capital=None):
         'gua_context_stats': gua_context_stats,
         'signal_context': signal_context,
     }
-    out_path = os.path.join(os.path.dirname(__file__), 'data_layer', 'data', 'backtest_8gua_result.json')
+    out_path = os.path.join(os.path.dirname(__file__), 'data_layer', 'data', 'backtest_y_gua_result.json')
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(out, f, ensure_ascii=False, indent=1, default=str)
     print(f"  已导出: {out_path}")

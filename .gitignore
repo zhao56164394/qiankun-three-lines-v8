@@ -25,6 +25,8 @@ data_layer/data/payload_cache/
 
 # 日志
 logs/
+*_log.txt
+ablation_log.txt
 
 # 临时文件
 *.tmp
@@ -45,6 +47,7 @@ live/logs/
 
 # 用户本地参考文档 (非项目代码)
 主力线战法（qmt）.txt
+*.tdx
 
 # OS
 Thumbs.db
