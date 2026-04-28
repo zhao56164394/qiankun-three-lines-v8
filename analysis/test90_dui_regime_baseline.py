@@ -1,0 +1,178 @@
+# -*- coding: utf-8 -*-
+"""阶段 2: 兑 regime (mkt_y=110) baseline + 主升浪事件分布 + 8 触发卦同扫
+
+兑 = y_pos=1 + y_spd=1 + y_acc=0
+含义: 长期高 + 中期高 + 短期低 — 顶部初动衰退 / 高位震荡顶
+   skill 表 baseline -1.46% (8 regime 中倒数第三, 微负)
+   样本属于"年线还没转弱, 但短期已开始落"的顶部环境
+
+考虑到 baseline 微负 + regime 含义混乱, 这次同步扫所有 8 个触发卦
+看哪个触发卦能在兑 regime 内抓 alpha
+"""
+import os, sys, io, time
+import numpy as np
+import pandas as pd
+from collections import Counter
+
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+LOOKBACK = 30
+EVAL_WIN = 30
+QIAN_RUN = 10
+REGIME_Y = '110'  # 兑
+
+GUA_NAMES = {'000': '坤', '001': '艮', '010': '坎', '011': '巽',
+             '100': '震', '101': '离', '110': '兑', '111': '乾'}
+GUAS = ['000', '001', '010', '011', '100', '101', '110', '111']
+
+WINDOWS = [
+    ('w1_2018',    '2018-01-01', '2019-01-01'),
+    ('w2_2019',    '2019-01-01', '2020-01-01'),
+    ('w3_2020',    '2020-01-01', '2021-01-01'),
+    ('w4_2021',    '2021-01-01', '2022-01-01'),
+    ('w5_2022',    '2022-01-01', '2023-01-01'),
+    ('w6_2023_24', '2023-01-01', '2025-01-01'),
+    ('w7_2025_26', '2025-01-01', '2026-04-21'),
+]
+
+
+def main():
+    t0 = time.time()
+    print('=== 加载 ===')
+    g = pd.read_parquet(os.path.join(ROOT, 'data_layer/data/foundation/stock_multi_scale_gua_daily.parquet'),
+                        columns=['date', 'code', 'd_gua'])
+    g['date'] = g['date'].astype(str); g['code'] = g['code'].astype(str).str.zfill(6)
+    g['stk_d'] = g['d_gua'].astype(str).str.zfill(3)
+
+    market = pd.read_parquet(os.path.join(ROOT, 'data_layer/data/foundation/multi_scale_gua_daily.parquet'),
+                              columns=['date', 'y_gua'])
+    market['date'] = market['date'].astype(str)
+    market['mkt_y'] = market['y_gua'].astype(str).str.zfill(3)
+    market = market[['date', 'mkt_y']].drop_duplicates('date')
+
+    p = pd.read_parquet(os.path.join(ROOT, 'data_layer/data/stocks.parquet'),
+                        columns=['date', 'code', 'close'])
+    p['date'] = p['date'].astype(str); p['code'] = p['code'].astype(str).str.zfill(6)
+
+    df = g.merge(p, on=['date', 'code'], how='inner').merge(market, on='date', how='left')
+    df = df.sort_values(['code', 'date']).reset_index(drop=True)
+    df = df.dropna(subset=['close', 'stk_d', 'mkt_y']).reset_index(drop=True)
+    print(f'  {len(df):,} 行, {time.time()-t0:.1f}s')
+
+    code_arr = df['code'].to_numpy()
+    date_arr = df['date'].to_numpy()
+    close_arr = df['close'].to_numpy().astype(np.float64)
+    stk_d_arr = df['stk_d'].to_numpy()
+    mkt_y_arr = df['mkt_y'].to_numpy()
+
+    code_change = np.r_[True, code_arr[1:] != code_arr[:-1]]
+    code_starts = np.where(code_change)[0]
+    code_ends = np.r_[code_starts[1:], len(code_arr)]
+
+    # ===== 1. 8 触发卦 baseline 同扫 =====
+    print(f'\n=== 兑 regime ({REGIME_Y}) — 8 触发卦 baseline 同扫 ===')
+    all_events = []
+    for ci in range(len(code_starts)):
+        s = code_starts[ci]; e = code_ends[ci]
+        if e - s < LOOKBACK + EVAL_WIN + 5: continue
+        cl = close_arr[s:e]; gua = stk_d_arr[s:e]
+        n = len(gua)
+        for i in range(LOOKBACK, n - EVAL_WIN):
+            gi = s + i
+            if mkt_y_arr[gi] != REGIME_Y: continue
+            seg_gua = gua[i:i+EVAL_WIN]
+            n_qian = (seg_gua == '111').sum()
+            ret_30 = (cl[i+EVAL_WIN] / cl[i] - 1) * 100
+            all_events.append({
+                'date': date_arr[gi], 'trigger': stk_d_arr[gi],
+                'n_qian': int(n_qian), 'ret_30': ret_30,
+            })
+    df_all = pd.DataFrame(all_events)
+    df_all['seg'] = ''
+    for w in WINDOWS:
+        df_all.loc[(df_all['date'] >= w[1]) & (df_all['date'] < w[2]), 'seg'] = w[0]
+    df_all = df_all[df_all['seg'] != ''].copy()
+
+    print(f'  兑 regime 总事件 (任何卦): {len(df_all):,}')
+    print(f'  兑 regime 全期期望: {df_all["ret_30"].mean():+.2f}%')
+
+    print(f'\n  按触发卦分组:')
+    print(f'  {"卦":<8} {"n":>8} {"期望%":>7} {"主升率%":>8}  walk-forward (w1..w7)         {"段稳":>5}')
+    for trig in GUAS:
+        sub = df_all[df_all['trigger'] == trig]
+        if len(sub) < 100:
+            print(f'  {trig}{GUA_NAMES[trig]:<6} {len(sub):>8,}  too few')
+            continue
+        ret = sub['ret_30'].mean()
+        zsl = (sub['n_qian'] >= QIAN_RUN).mean() * 100
+
+        rets = []
+        for w in WINDOWS:
+            seg = sub[sub['seg'] == w[0]]
+            r = seg['ret_30'].mean() if len(seg) > 50 else float('nan')
+            rets.append(r)
+        n_pos = sum(1 for r in rets if not np.isnan(r) and r > 0)
+        n_seg = sum(1 for r in rets if not np.isnan(r))
+        seg_str = ' '.join(f'{r:>+5.1f}' if not np.isnan(r) else '   --' for r in rets)
+        print(f'  {trig}{GUA_NAMES[trig]:<6} {len(sub):>8,} {ret:>+6.2f} {zsl:>7.1f}  {seg_str}  {n_pos}/{n_seg}')
+
+    # ===== 2. 主升浪事件分布 (找谁是兑 regime 主升浪起点) =====
+    print(f'\n\n=== 兑 regime 主升浪 (≥{QIAN_RUN}日 乾连续) 事件分布 ===')
+    runs = []
+    for ci in range(len(code_starts)):
+        s = code_starts[ci]; e = code_ends[ci]
+        if e - s < 5: continue
+        gua = stk_d_arr[s:e]; cl = close_arr[s:e]
+        n = len(gua)
+        i = 0
+        while i < n:
+            if gua[i] != '111':
+                i += 1; continue
+            j = i
+            while j < n and gua[j] == '111':
+                j += 1
+            length = j - i
+            gi = s + i
+            if length >= QIAN_RUN and mkt_y_arr[gi] == REGIME_Y:
+                prev = gua[i-1] if i > 0 else 'NULL'
+                if i + 30 < n:
+                    ret_30 = (cl[i+30] / cl[i] - 1) * 100
+                else:
+                    ret_30 = float('nan')
+                runs.append({
+                    'start': date_arr[gi], 'length': length,
+                    'prev_gua': prev, 'ret_30': ret_30,
+                })
+            i = j
+    df_r = pd.DataFrame(runs)
+    print(f'  主升浪起点: {len(df_r):,}')
+    if len(df_r) > 0:
+        print(f'  平均长度: {df_r["length"].mean():.1f} 日')
+        print(f'  起点 30 日均收益: {df_r["ret_30"].mean():+.2f}%')
+
+        df_r['seg'] = ''
+        for w in WINDOWS:
+            df_r.loc[(df_r['start'] >= w[1]) & (df_r['start'] < w[2]), 'seg'] = w[0]
+
+        print(f'\n  按段分布:')
+        print(f'  {"seg":<14} {"事件":>6} {"30日%":>7}')
+        for w in WINDOWS:
+            seg = df_r[df_r['seg'] == w[0]]
+            if len(seg) == 0:
+                print(f'  {w[0]:<14} {0:>6} {"--":>7}')
+                continue
+            print(f'  {w[0]:<14} {len(seg):>6} {seg["ret_30"].mean():>+6.2f}')
+
+        print(f'\n  起点前一日卦象分布:')
+        prev_cnt = Counter(df_r['prev_gua'])
+        for prev, cnt in prev_cnt.most_common():
+            ratio = cnt / len(df_r) * 100
+            label = f'{prev}{GUA_NAMES.get(prev, "?")}' if prev in GUA_NAMES else prev
+            print(f'    {label:<10} {cnt:>5} ({ratio:.1f}%)')
+
+    print(f'\n=== 完成, {time.time()-t0:.1f}s ===')
+
+
+if __name__ == '__main__':
+    main()
